@@ -1,0 +1,1888 @@
+{
+  "manifest_version": "1.0",
+  "project": "FamilyHub",
+  "description": "Self-hosted family organisation web app. Docker-deployed on Raspberry Pi 4. React PWA frontend, FastAPI backend, SQLite database, Caddy reverse proxy. Wall-mounted touchscreen + phone PWA + browser surfaces.",
+
+  "agent_instructions": {
+    "role": "You are a senior full-stack engineer implementing FamilyHub. You write complete, production-quality code. You never produce stubs or TODO placeholders — every file you create must be fully functional. You work through tasks in dependency order. Before starting a task, confirm all tasks listed in depends_on are complete. After completing a task, run the commands in acceptance_check to verify it before moving on.",
+    "working_directory": "/home/dev/familyhub",
+    "code_style": {
+      "python": "PEP8, type hints on all functions, async/await throughout, docstrings on public functions",
+      "typescript": "strict mode, explicit return types, no any, functional components with hooks",
+      "general": "no commented-out code, no TODO comments, meaningful variable names"
+    },
+    "file_creation_rule": "Always write the complete file. Never truncate. If a file already exists, read it first then write the full updated version.",
+    "error_handling_rule": "All API endpoints must have try/except with appropriate HTTP status codes. All async DB operations must be wrapped. Never let unhandled exceptions reach the client."
+  },
+
+  "project_context": {
+    "tech_stack": {
+      "backend": "Python 3.12, FastAPI, SQLAlchemy 2.0 async, Alembic, APScheduler, Pillow, PyJWT, passlib[bcrypt], httpx, python-dateutil, cryptography, pywebpush",
+      "frontend": "React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui, TanStack Query v5, Zustand, React Router v6, axios, vite-plugin-pwa, Workbox, @dnd-kit",
+      "infrastructure": "Docker Compose v2, Caddy 2, Nginx (for prod frontend serving), GitHub Actions (CI/CD), Avahi mDNS",
+      "database": "SQLite via aiosqlite (Phase 1-3), PostgreSQL optional upgrade path (Phase 4+)"
+    },
+    "repo_structure": {
+      "backend/app/main.py": "FastAPI app entry, lifespan hooks, middleware",
+      "backend/app/core/config.py": "pydantic-settings Settings model",
+      "backend/app/core/database.py": "async SQLAlchemy engine, get_db dependency",
+      "backend/app/core/security.py": "JWT, bcrypt, get_current_user dependency",
+      "backend/app/core/encryption.py": "AES-256-GCM encrypt/decrypt for OAuth tokens",
+      "backend/app/core/events.py": "in-memory EventBus for WebSocket broadcasts",
+      "backend/app/models/": "SQLAlchemy ORM models (one file per domain)",
+      "backend/app/schemas/": "Pydantic request/response models",
+      "backend/app/routers/": "FastAPI route handlers (one file per domain)",
+      "backend/app/services/": "business logic layer",
+      "backend/app/jobs/": "APScheduler background jobs",
+      "backend/app/integrations/": "external service clients (Google, Microsoft, Apple, weather)",
+      "backend/alembic/": "database migration scripts",
+      "backend/tests/": "pytest test suite",
+      "frontend/src/pages/": "route-level React page components",
+      "frontend/src/components/": "shared reusable components",
+      "frontend/src/wall/": "wall-display-specific components (isolated)",
+      "frontend/src/api/": "TanStack Query hooks and axios client",
+      "frontend/src/stores/": "Zustand global state",
+      "frontend/src/hooks/": "custom React hooks",
+      "config/Caddyfile": "Caddy reverse proxy config",
+      "docker-compose.yml": "Docker Compose service definitions",
+      ".env.example": "documented environment variable template"
+    },
+    "key_patterns": {
+      "auth": "JWT in httpOnly SameSite=Strict cookie. get_current_user FastAPI dependency reads cookie on every protected endpoint.",
+      "database": "All queries async via SQLAlchemy 2.0 async. All IDs are UUID stored as TEXT. All timestamps UTC.",
+      "soft_delete": "Records never hard-deleted. is_deleted=True flag + filter on all queries.",
+      "encryption": "OAuth credentials in calendar_sources.credentials_encrypted use AES-256-GCM keyed from SECRET_KEY via HKDF.",
+      "background_jobs": "APScheduler AsyncIOScheduler started in FastAPI lifespan. Cron and interval jobs. Errors logged, never crash the scheduler.",
+      "realtime": "WebSocket at /api/ws/wall. services emit to EventBus. WS handler forwards to connected clients. Frontend falls back to 60s polling if WS disconnects."
+    }
+  },
+
+  "env_vars": {
+    "FAMILY_NAME": "Display name for the household",
+    "TIMEZONE": "IANA timezone e.g. America/New_York",
+    "SECRET_KEY": "64-char hex. Generate: openssl rand -hex 32. Used for JWT signing and AES key derivation.",
+    "DATABASE_URL": "sqlite+aiosqlite:////data/db/familyhub.db",
+    "ALLOWED_ORIGINS": "Comma-separated CORS origins e.g. https://familyhub.local",
+    "BACKUP_RETENTION_DAYS": "Number of daily backups to keep (default 30)",
+    "BACKUP_TIME": "24h time for daily backup e.g. 03:00",
+    "CALENDAR_SYNC_INTERVAL_MINUTES": "How often to sync calendars (default 15)",
+    "WALL_IDLE_TIMEOUT_SECONDS": "Seconds before wall enters idle slideshow (default 300)",
+    "VAPID_PUBLIC_KEY": "Web Push VAPID public key",
+    "VAPID_PRIVATE_KEY": "Web Push VAPID private key",
+    "VAPID_CONTACT": "mailto: contact for VAPID",
+    "GOOGLE_CLIENT_ID": "Google OAuth2 client ID",
+    "GOOGLE_CLIENT_SECRET": "Google OAuth2 client secret",
+    "GOOGLE_REDIRECT_URI": "https://familyhub.local/api/integrations/google/callback",
+    "MICROSOFT_CLIENT_ID": "Azure app registration client ID",
+    "MICROSOFT_CLIENT_SECRET": "Azure app registration client secret",
+    "MICROSOFT_TENANT_ID": "common (or specific tenant GUID)",
+    "MICROSOFT_REDIRECT_URI": "https://familyhub.local/api/integrations/microsoft/callback",
+    "WEATHER_LAT": "Latitude for weather widget (optional)",
+    "WEATHER_LON": "Longitude for weather widget (optional)",
+    "SMTP_HOST": "SMTP server for email notifications (optional)",
+    "SMTP_PORT": "SMTP port (optional)",
+    "SMTP_USER": "SMTP username (optional)",
+    "SMTP_PASSWORD": "SMTP password (optional)",
+    "SMTP_FROM": "From address for notification emails (optional)"
+  },
+
+  "phases": [
+    {
+      "id": "phase_1",
+      "title": "Foundation + Wall Screen + PWA",
+      "weeks": "1-8",
+      "goal": "Working Docker-deployed application: wall display live, PWA installable on phones, Google Calendar syncing, tasks completable.",
+      "exit_criteria": [
+        "docker compose up -d on fresh Pi → accessible at familyhub.local within 3 minutes",
+        "Setup wizard completes successfully",
+        "Family member logs in on iPhone via PWA with PIN",
+        "PWA installs on Android Chrome and iOS Safari",
+        "Wall /wall shows clock, events, chore dots",
+        "Idle slideshow activates after 5 min, touch exits",
+        "Completing task on phone updates wall within 5 seconds",
+        "Google Calendar events appear within 15 minutes",
+        "Child-mode dashboard renders with large touch targets"
+      ],
+      "sprints": [
+        {
+          "id": "sprint_1_1",
+          "title": "Project Scaffold & Infrastructure",
+          "weeks": "1-2",
+          "goal": "Empty repo → running Docker stack at familyhub.local",
+          "tasks": [
+            {
+              "id": "task_1_1_1",
+              "title": "Initialize repository and Docker Compose stack",
+              "type": ["INFRA"],
+              "is_blocker": true,
+              "depends_on": [],
+              "objective": "Create the full project skeleton, Docker Compose with 3 services, Caddyfile, .env.example, and gitignore. Stack must boot and serve a health check.",
+              "files_to_create": [
+                {
+                  "path": ".gitignore",
+                  "description": "Exclude secrets, runtime data, build artifacts",
+                  "content": ".env\ndata/\n*.db\n*.db-shm\n*.db-wal\n__pycache__/\n*.pyc\n.venv/\nnode_modules/\ndist/\n.DS_Store\ncaddy_data/\ncaddy_config/\n*.pem\n*.key\n*.crt\n"
+                },
+                {
+                  "path": "docker-compose.yml",
+                  "description": "Three services: api (FastAPI port 8000), web (Nginx port 3000), caddy (ports 80/443). All restart: unless-stopped. api mounts ./data:/data. caddy mounts config/Caddyfile and named volumes caddy_data/caddy_config.",
+                  "key_points": [
+                    "Use Docker Compose v2 syntax (no top-level 'version' key)",
+                    "api service: env_file: .env, build: ./backend, expose 8000 (NOT ports - Caddy proxies)",
+                    "web service: build: ./frontend, expose 3000",
+                    "caddy service: image: caddy:2-alpine, ports: ['80:80','443:443']",
+                    "Named volumes: caddy_data, caddy_config",
+                    "Bind mounts on api: ./data/db:/data/db, ./data/photos:/data/photos, ./data/backups:/data/backups"
+                  ]
+                },
+                {
+                  "path": "config/Caddyfile",
+                  "description": "Route /api/* to api:8000, everything else to web:3000. TLS internal for familyhub.local.",
+                  "content": "familyhub.local {\n  tls internal\n\n  handle /api/* {\n    reverse_proxy api:8000\n  }\n\n  handle /photos/* {\n    reverse_proxy api:8000\n  }\n\n  handle /ws/* {\n    reverse_proxy api:8000\n  }\n\n  handle {\n    reverse_proxy web:3000\n  }\n}\n"
+                },
+                {
+                  "path": ".env.example",
+                  "description": "Documented template for all env vars. Values are placeholders or instructions, never real secrets."
+                },
+                {
+                  "path": "data/db/.gitkeep",
+                  "description": "Ensure data directories are tracked by git but contents are ignored"
+                },
+                {
+                  "path": "data/photos/.gitkeep",
+                  "description": "Placeholder"
+                },
+                {
+                  "path": "data/backups/.gitkeep",
+                  "description": "Placeholder"
+                },
+                {
+                  "path": "backend/app/main.py",
+                  "description": "Minimal FastAPI app with /api/health endpoint. Placeholder only - will be replaced in task_1_1_3.",
+                  "code_pattern": "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/api/health')\nasync def health():\n    return {'status': 'ok', 'version': '0.1.0'}\n"
+                },
+                {
+                  "path": "backend/Dockerfile",
+                  "description": "Minimal Dockerfile for the placeholder backend.",
+                  "code_pattern": "FROM python:3.12-slim\nWORKDIR /app\nRUN pip install fastapi uvicorn\nCOPY . .\nCMD [\"uvicorn\", \"app.main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+                },
+                {
+                  "path": "frontend/index.html",
+                  "description": "Placeholder HTML page served by Nginx as the frontend.",
+                  "content": "<!DOCTYPE html><html><body><h1>FamilyHub</h1><p>Frontend coming soon.</p></body></html>\n"
+                },
+                {
+                  "path": "frontend/Dockerfile",
+                  "description": "Minimal Dockerfile serving the placeholder frontend via Nginx on port 3000.",
+                  "code_pattern": "FROM nginx:alpine\nCOPY index.html /usr/share/nginx/html/index.html\nRUN sed -i 's/listen       80/listen       3000/' /etc/nginx/conf.d/default.conf\nEXPOSE 3000\n"
+                },
+                {
+                  "path": "README.md",
+                  "description": "Quick-start: clone, copy .env, generate SECRET_KEY, docker compose up -d, navigate to https://familyhub.local"
+                }
+              ],
+              "shell_commands": [
+                {
+                  "description": "Create all required directories",
+                  "command": "mkdir -p backend/app frontend config data/db data/photos data/backups .github/workflows",
+                  "cwd": "."
+                },
+                {
+                  "description": "Initialize git repo",
+                  "command": "git init && git add .gitignore && git commit -m 'chore: initial gitignore'",
+                  "cwd": "."
+                },
+                {
+                  "description": "Copy env example and generate SECRET_KEY placeholder",
+                  "command": "cp .env.example .env",
+                  "cwd": "."
+                },
+                {
+                  "description": "Boot the stack",
+                  "command": "docker compose up -d --build",
+                  "cwd": "."
+                }
+              ],
+              "acceptance_check": [
+                "curl -k https://familyhub.local/api/health | grep '\"status\":\"ok\"'",
+                "docker compose ps | grep -c 'running' | grep -q '3'",
+                "docker compose restart && sleep 5 && curl -k https://familyhub.local/api/health | grep ok"
+              ],
+              "gotchas": [
+                "Caddy tls internal issues a self-signed cert. Browsers will warn until the cert is trusted on each device.",
+                "mDNS (familyhub.local) requires Avahi running on the Pi host: sudo apt install avahi-daemon",
+                "Docker internal DNS resolves service names (api, web) only between containers. Host resolves familyhub.local via mDNS.",
+                "The /photos/* and /ws/* routes in Caddyfile must be listed BEFORE the catch-all handle block."
+              ]
+            },
+            {
+              "id": "task_1_1_2",
+              "title": "GitHub Actions CI: multi-arch Docker build",
+              "type": ["INFRA"],
+              "is_blocker": false,
+              "depends_on": ["task_1_1_1"],
+              "objective": "Push to main branch triggers CI that builds linux/amd64 and linux/arm64 Docker images and pushes to GHCR.",
+              "files_to_create": [
+                {
+                  "path": ".github/workflows/build.yml",
+                  "description": "GitHub Actions workflow using docker/build-push-action with QEMU for ARM emulation and GHA layer caching.",
+                  "key_points": [
+                    "Trigger: push to main",
+                    "Uses: actions/checkout@v4, docker/setup-qemu-action@v3, docker/setup-buildx-action@v3, docker/login-action@v3, docker/build-push-action@v5",
+                    "Login to ghcr.io with GITHUB_TOKEN (no secret setup needed)",
+                    "platforms: linux/amd64,linux/arm64",
+                    "Tags: ghcr.io/${{ github.repository }}/familyhub-api:latest and :${{ github.sha }}",
+                    "cache-from/cache-to: type=gha,mode=max",
+                    "Run pytest backend tests as a separate job BEFORE the build job",
+                    "Test job: pip install -r requirements.txt pytest pytest-asyncio httpx && pytest tests/ -v"
+                  ]
+                }
+              ],
+              "shell_commands": [],
+              "acceptance_check": [
+                "After pushing to main, check GitHub Actions tab for a passing workflow run",
+                "ghcr.io packages page shows familyhub-api with arm64 manifest"
+              ],
+              "gotchas": [
+                "First ARM64 build via QEMU emulation takes 15-20 minutes. Subsequent builds with cache hit are ~3 minutes.",
+                "The GITHUB_TOKEN needs packages:write permission. Add permissions: { contents: read, packages: write } to the job.",
+                "Image tags must be lowercase. Use ${{ github.repository }} not ${{ github.repository_owner }}/${{ github.event.repository.name }} to avoid case issues."
+              ]
+            },
+            {
+              "id": "task_1_1_3",
+              "title": "FastAPI application skeleton",
+              "type": ["BE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_1"],
+              "objective": "Full FastAPI skeleton: config, async database, security helpers, Alembic wired up, auto-migrations on startup, /api/health endpoint.",
+              "packages_to_install": [
+                "fastapi", "uvicorn[standard]", "sqlalchemy[asyncio]", "aiosqlite",
+                "alembic", "pydantic-settings", "pyjwt", "passlib[bcrypt]",
+                "python-multipart", "httpx", "pillow", "pillow-heif",
+                "apscheduler", "python-dateutil", "cryptography", "pywebpush",
+                "google-auth", "google-auth-oauthlib", "google-api-python-client",
+                "msal", "caldav", "icalendar", "recipe-scrapers"
+              ],
+              "files_to_create": [
+                {
+                  "path": "backend/requirements.txt",
+                  "description": "All Python dependencies pinned. Include all packages listed in packages_to_install plus pytest, pytest-asyncio, httpx as dev deps (mark with comment)."
+                },
+                {
+                  "path": "backend/app/__init__.py",
+                  "description": "Empty init file"
+                },
+                {
+                  "path": "backend/app/core/__init__.py",
+                  "description": "Empty init file"
+                },
+                {
+                  "path": "backend/app/core/config.py",
+                  "description": "pydantic-settings BaseSettings class loading all env vars.",
+                  "code_pattern": "from pydantic_settings import BaseSettings\nfrom functools import lru_cache\n\nclass Settings(BaseSettings):\n    family_name: str = 'FamilyHub'\n    timezone: str = 'UTC'\n    secret_key: str\n    database_url: str = 'sqlite+aiosqlite:////data/db/familyhub.db'\n    allowed_origins: str = 'https://familyhub.local'\n    backup_retention_days: int = 30\n    backup_time: str = '03:00'\n    calendar_sync_interval_minutes: int = 15\n    wall_idle_timeout_seconds: int = 300\n    vapid_public_key: str = ''\n    vapid_private_key: str = ''\n    vapid_contact: str = 'mailto:admin@familyhub.local'\n    google_client_id: str = ''\n    google_client_secret: str = ''\n    google_redirect_uri: str = 'https://familyhub.local/api/integrations/google/callback'\n    microsoft_client_id: str = ''\n    microsoft_client_secret: str = ''\n    microsoft_tenant_id: str = 'common'\n    microsoft_redirect_uri: str = 'https://familyhub.local/api/integrations/microsoft/callback'\n    weather_lat: float | None = None\n    weather_lon: float | None = None\n    smtp_host: str = ''\n    smtp_port: int = 587\n    smtp_user: str = ''\n    smtp_password: str = ''\n    smtp_from: str = ''\n\n    class Config:\n        env_file = '.env'\n        env_file_encoding = 'utf-8'\n\n@lru_cache\ndef get_settings() -> Settings:\n    return Settings()\n\nsettings = get_settings()\n"
+                },
+                {
+                  "path": "backend/app/core/database.py",
+                  "description": "Async SQLAlchemy engine, session factory, Base declarative class, get_db dependency, SQLite PRAGMA foreign_keys=ON listener.",
+                  "code_pattern": "from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker\nfrom sqlalchemy.orm import DeclarativeBase\nfrom sqlalchemy import event, text\nfrom app.core.config import settings\n\nengine = create_async_engine(\n    settings.database_url,\n    echo=False,\n    connect_args={'check_same_thread': False}\n)\n\n@event.listens_for(engine.sync_engine, 'connect')\ndef set_sqlite_pragma(dbapi_conn, _):\n    cursor = dbapi_conn.cursor()\n    cursor.execute('PRAGMA foreign_keys=ON')\n    cursor.execute('PRAGMA journal_mode=WAL')\n    cursor.close()\n\nAsyncSessionLocal = async_sessionmaker(\n    engine, class_=AsyncSession, expire_on_commit=False\n)\n\nclass Base(DeclarativeBase):\n    pass\n\nasync def get_db():\n    async with AsyncSessionLocal() as session:\n        try:\n            yield session\n            await session.commit()\n        except Exception:\n            await session.rollback()\n            raise\n"
+                },
+                {
+                  "path": "backend/app/core/security.py",
+                  "description": "JWT creation/verification, bcrypt password hashing, get_current_user dependency, require_role factory, PIN rate limiter.",
+                  "code_pattern": "from datetime import datetime, timedelta, timezone\nfrom collections import defaultdict\nfrom time import time\nfrom typing import Callable\nimport jwt\nfrom passlib.context import CryptContext\nfrom fastapi import Cookie, Depends, HTTPException, status\nfrom sqlalchemy.ext.asyncio import AsyncSession\nfrom app.core.config import settings\nfrom app.core.database import get_db\n\npwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')\n_pin_attempts: dict[str, list[float]] = defaultdict(list)\n\ndef hash_password(password: str) -> str:\n    return pwd_context.hash(password)\n\ndef verify_password(plain: str, hashed: str) -> bool:\n    return pwd_context.verify(plain, hashed)\n\ndef create_access_token(user_id: str, expires_days: int = 30) -> str:\n    payload = {\n        'sub': user_id,\n        'exp': datetime.now(timezone.utc) + timedelta(days=expires_days)\n    }\n    return jwt.encode(payload, settings.secret_key, algorithm='HS256')\n\ndef decode_token(token: str) -> dict:\n    return jwt.decode(token, settings.secret_key, algorithms=['HS256'])\n\ndef check_pin_rate_limit(user_id: str) -> None:\n    now = time()\n    attempts = [t for t in _pin_attempts[user_id] if now - t < 60]\n    _pin_attempts[user_id] = attempts\n    if len(attempts) >= 5:\n        raise HTTPException(status_code=429, detail='Too many PIN attempts. Wait 60 seconds.')\n    _pin_attempts[user_id].append(now)\n\nasync def get_current_user(\n    access_token: str | None = Cookie(default=None),\n    db: AsyncSession = Depends(get_db)\n):\n    from app.models.auth import User\n    if not access_token:\n        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)\n    try:\n        payload = decode_token(access_token)\n        user_id: str = payload.get('sub')\n    except jwt.PyJWTError:\n        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)\n    user = await db.get(User, user_id)\n    if not user or user.is_deleted:\n        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)\n    return user\n\ndef require_role(*roles: str) -> Callable:\n    async def dependency(current_user=Depends(get_current_user)):\n        if current_user.role not in roles:\n            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)\n        return current_user\n    return dependency\n"
+                },
+                {
+                  "path": "backend/app/core/encryption.py",
+                  "description": "AES-256-GCM encrypt/decrypt for storing OAuth tokens. Key derived via HKDF from SECRET_KEY.",
+                  "code_pattern": "import os\nimport base64\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\nfrom cryptography.hazmat.primitives.kdf.hkdf import HKDF\nfrom cryptography.hazmat.primitives import hashes\nfrom app.core.config import settings\n\ndef _derive_key() -> bytes:\n    return HKDF(\n        algorithm=hashes.SHA256(),\n        length=32,\n        salt=None,\n        info=b'familyhub-oauth-encryption'\n    ).derive(settings.secret_key.encode())\n\ndef encrypt(plaintext: str) -> str:\n    key = _derive_key()\n    nonce = os.urandom(12)\n    ct = AESGCM(key).encrypt(nonce, plaintext.encode(), None)\n    return base64.urlsafe_b64encode(nonce + ct).decode()\n\ndef decrypt(ciphertext: str) -> str:\n    key = _derive_key()\n    data = base64.urlsafe_b64decode(ciphertext.encode())\n    nonce, ct = data[:12], data[12:]\n    return AESGCM(key).decrypt(nonce, ct, None).decode()\n"
+                },
+                {
+                  "path": "backend/app/core/events.py",
+                  "description": "In-memory EventBus for broadcasting to WebSocket connections. Services call event_bus.emit().",
+                  "code_pattern": "from typing import Callable\nimport asyncio\n\nclass EventBus:\n    def __init__(self):\n        self._listeners: list[Callable] = []\n\n    def subscribe(self, callback: Callable) -> Callable:\n        self._listeners.append(callback)\n        def unsubscribe():\n            self._listeners.remove(callback)\n        return unsubscribe\n\n    async def emit(self, event_type: str, payload: dict) -> None:\n        message = {'type': event_type, 'data': payload}\n        dead = []\n        for listener in self._listeners:\n            try:\n                await listener(message)\n            except Exception:\n                dead.append(listener)\n        for d in dead:\n            self._listeners.remove(d)\n\nevent_bus = EventBus()\n"
+                },
+                {
+                  "path": "backend/app/main.py",
+                  "description": "Full FastAPI app with lifespan (Alembic migrations + APScheduler start), CORS middleware, exception handlers, router includes, StaticFiles mount.",
+                  "code_pattern": "from contextlib import asynccontextmanager\nfrom fastapi import FastAPI, Request\nfrom fastapi.middleware.cors import CORSMiddleware\nfrom fastapi.staticfiles import StaticFiles\nfrom fastapi.responses import JSONResponse\nfrom apscheduler.schedulers.asyncio import AsyncIOScheduler\nfrom app.core.config import settings\nimport logging\nimport os\n\nlogger = logging.getLogger(__name__)\nscheduler = AsyncIOScheduler(timezone=settings.timezone)\n\n@asynccontextmanager\nasync def lifespan(app: FastAPI):\n    # Run Alembic migrations\n    from alembic.config import Config\n    from alembic import command\n    alembic_cfg = Config('alembic.ini')\n    command.upgrade(alembic_cfg, 'head')\n    logger.info('Database migrations applied')\n    # Start background scheduler\n    scheduler.start()\n    logger.info('APScheduler started')\n    yield\n    scheduler.shutdown()\n\napp = FastAPI(\n    title='FamilyHub API',\n    version='0.1.0',\n    lifespan=lifespan,\n    docs_url='/api/docs',\n    openapi_url='/api/openapi.json'\n)\n\norigins = [o.strip() for o in settings.allowed_origins.split(',')]\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=['*'],\n    allow_headers=['*'],\n)\n\n@app.exception_handler(Exception)\nasync def global_exception_handler(request: Request, exc: Exception):\n    logger.exception('Unhandled exception: %s', exc)\n    return JSONResponse(status_code=500, content={'detail': 'Internal server error'})\n\n@app.get('/api/health')\nasync def health():\n    return {'status': 'ok', 'version': '0.1.0'}\n\nos.makedirs('/data/photos/originals', exist_ok=True)\nos.makedirs('/data/photos/avatars', exist_ok=True)\nos.makedirs('/data/photos/completions', exist_ok=True)\nos.makedirs('/data/photos/thumbnails', exist_ok=True)\nos.makedirs('/data/db', exist_ok=True)\nos.makedirs('/data/backups', exist_ok=True)\napp.mount('/photos', StaticFiles(directory='/data/photos'), name='photos')\n"
+                },
+                {
+                  "path": "backend/alembic.ini",
+                  "description": "Alembic configuration pointing to alembic/ directory and using the DATABASE_URL from config."
+                },
+                {
+                  "path": "backend/alembic/env.py",
+                  "description": "Alembic env.py wired to async SQLAlchemy engine and importing Base.metadata for autogenerate. Must use asyncio.run() pattern for async migrations.",
+                  "key_points": [
+                    "Import Base from app.core.database",
+                    "Import all model files so metadata is populated before autogenerate",
+                    "Use run_async_migrations() with asyncio.run() in run_migrations_online()",
+                    "Get DATABASE_URL from settings, not from alembic.ini sqlalchemy.url"
+                  ]
+                },
+                {
+                  "path": "backend/Dockerfile",
+                  "description": "Production Dockerfile. python:3.12-slim, WORKDIR /app, install requirements, copy app code, CMD uvicorn.",
+                  "code_pattern": "FROM python:3.12-slim\nWORKDIR /app\nRUN apt-get update && apt-get install -y --no-install-recommends libheif-dev && rm -rf /var/lib/apt/lists/*\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nCMD [\"uvicorn\", \"app.main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\", \"--workers\", \"1\"]\n"
+                }
+              ],
+              "shell_commands": [
+                {
+                  "description": "Set up Python virtual environment",
+                  "command": "cd backend && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt",
+                  "cwd": "backend"
+                },
+                {
+                  "description": "Initialize Alembic",
+                  "command": "cd backend && source .venv/bin/activate && alembic init alembic",
+                  "cwd": "backend"
+                },
+                {
+                  "description": "Rebuild and restart api service",
+                  "command": "docker compose up -d --build api",
+                  "cwd": "."
+                }
+              ],
+              "acceptance_check": [
+                "curl -k https://familyhub.local/api/health",
+                "docker compose logs api | grep 'Database migrations applied'",
+                "docker compose logs api | grep 'APScheduler started'"
+              ],
+              "gotchas": [
+                "Alembic autogenerate REQUIRES all model modules to be imported in env.py before it can detect tables. Add explicit imports at the top of env.py for every models/*.py file.",
+                "WAL mode (PRAGMA journal_mode=WAL) greatly improves SQLite concurrent read performance on Pi. Always enable it.",
+                "PRAGMA foreign_keys=ON must be set per-connection in SQLite — it is NOT a database-level setting. The event listener on engine.sync_engine 'connect' is the correct place.",
+                "libheif-dev is needed in the Docker image for pillow-heif to work on ARM64."
+              ]
+            },
+            {
+              "id": "task_1_1_4",
+              "title": "React/Vite/TypeScript frontend skeleton",
+              "type": ["FE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_1"],
+              "objective": "Full React/Vite/TS project with Tailwind, shadcn/ui, TanStack Query, Zustand auth store, axios client, React Router, vite-plugin-pwa with manifest and service worker, multi-stage Docker build.",
+              "shell_commands": [
+                {
+                  "description": "Scaffold Vite project",
+                  "command": "npm create vite@latest frontend -- --template react-ts",
+                  "cwd": "."
+                },
+                {
+                  "description": "Install all dependencies",
+                  "command": "npm install react-router-dom @tanstack/react-query axios zustand && npm install -D tailwindcss postcss autoprefixer vite-plugin-pwa workbox-window @types/node",
+                  "cwd": "frontend"
+                },
+                {
+                  "description": "Initialise Tailwind",
+                  "command": "npx tailwindcss init -p",
+                  "cwd": "frontend"
+                },
+                {
+                  "description": "Install shadcn/ui CLI and init",
+                  "command": "npx shadcn-ui@latest init --defaults",
+                  "cwd": "frontend"
+                }
+              ],
+              "files_to_create": [
+                {
+                  "path": "frontend/tailwind.config.js",
+                  "description": "Tailwind config with FamilyHub theme tokens. content: ['./index.html','./src/**/*.{ts,tsx}'].",
+                  "key_points": [
+                    "Extend colors with primary (indigo-600 default), child-bg (yellow-50), child-accent (yellow-500)",
+                    "Extend fontFamily with display for large wall clock text",
+                    "Keep darkMode: 'class' so wall dark mode toggle works"
+                  ]
+                },
+                {
+                  "path": "frontend/vite.config.ts",
+                  "description": "Vite config with react(), VitePWA plugin, and dev proxy /api → http://localhost:8000.",
+                  "code_pattern": "import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nimport { VitePWA } from 'vite-plugin-pwa'\n\nexport default defineConfig({\n  plugins: [\n    react(),\n    VitePWA({\n      registerType: 'autoUpdate',\n      includeAssets: ['icons/*.png'],\n      manifest: {\n        name: 'FamilyHub',\n        short_name: 'FamilyHub',\n        description: 'Your family, organised',\n        theme_color: '#4F46E5',\n        background_color: '#ffffff',\n        display: 'standalone',\n        start_url: '/',\n        icons: [\n          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },\n          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },\n          { src: 'icons/icon-180.png', sizes: '180x180', type: 'image/png', purpose: 'apple-touch-icon' }\n        ]\n      },\n      workbox: {\n        navigateFallback: '/index.html',\n        navigateFallbackDenylist: [/^\\/api/, /^\\/photos/],\n        runtimeCaching: [\n          { urlPattern: /^\\/api\\/auth\\/me/, handler: 'NetworkFirst', options: { cacheName: 'auth', networkTimeoutSeconds: 3 } },\n          { urlPattern: /^\\/api\\/users/, handler: 'NetworkFirst', options: { cacheName: 'users' } },\n          { urlPattern: /^\\/api\\/tasks/, handler: 'NetworkFirst', options: { cacheName: 'tasks' } },\n          { urlPattern: /^\\/api\\/calendar\\/events/, handler: 'NetworkFirst', options: { cacheName: 'events' } }\n        ]\n      }\n    })\n  ],\n  server: {\n    proxy: { '/api': 'http://localhost:8000', '/photos': 'http://localhost:8000' }\n  }\n})\n"
+                },
+                {
+                  "path": "frontend/src/api/client.ts",
+                  "description": "Axios instance with base URL /api, withCredentials: true (for cookie), 401 interceptor that clears auth store and redirects to /login.",
+                  "code_pattern": "import axios from 'axios'\n\nexport const apiClient = axios.create({\n  baseURL: '/api',\n  withCredentials: true,\n  headers: { 'Content-Type': 'application/json' }\n})\n\napiClient.interceptors.response.use(\n  (res) => res,\n  (error) => {\n    if (error.response?.status === 401) {\n      useAuthStore.getState().clearUser()\n      window.location.href = '/login'\n    }\n    return Promise.reject(error)\n  }\n)\n"
+                },
+                {
+                  "path": "frontend/src/stores/auth.ts",
+                  "description": "Zustand store for current user. Fields: user (User | null), setUser, clearUser.",
+                  "code_pattern": "import { create } from 'zustand'\n\ninterface User {\n  id: string\n  display_name: string\n  role: 'admin' | 'co_admin' | 'teen' | 'child' | 'guest'\n  color_hex: string\n  ui_mode: 'standard' | 'child' | 'kiosk'\n  avatar_type: 'photo' | 'emoji'\n  avatar_value: string\n}\n\ninterface AuthStore {\n  user: User | null\n  setUser: (user: User) => void\n  clearUser: () => void\n}\n\nexport const useAuthStore = create<AuthStore>((set) => ({\n  user: null,\n  setUser: (user) => set({ user }),\n  clearUser: () => set({ user: null })\n}))\n"
+                },
+                {
+                  "path": "frontend/src/main.tsx",
+                  "description": "React app entry. Wraps App in QueryClientProvider with TanStack Query defaults (staleTime 60s, retry 1).",
+                  "code_pattern": "import React from 'react'\nimport ReactDOM from 'react-dom/client'\nimport { QueryClient, QueryClientProvider } from '@tanstack/react-query'\nimport App from './App'\nimport './index.css'\n\nconst queryClient = new QueryClient({\n  defaultOptions: {\n    queries: { staleTime: 60_000, retry: 1, refetchOnWindowFocus: false }\n  }\n})\n\nReactDOM.createRoot(document.getElementById('root')!).render(\n  <React.StrictMode>\n    <QueryClientProvider client={queryClient}>\n      <App />\n    </QueryClientProvider>\n  </React.StrictMode>\n)\n"
+                },
+                {
+                  "path": "frontend/src/App.tsx",
+                  "description": "React Router setup with all placeholder routes. On mount: checks /api/auth/setup/status → navigate to /setup if false, else /api/auth/me → navigate to /login if 401.",
+                  "key_points": [
+                    "Routes: /, /setup, /login, /dashboard, /tasks, /calendar, /lists, /wall, /admin/*",
+                    "Route /wall renders WallLayout with no nav chrome",
+                    "useEffect on mount calls GET /api/auth/setup/status then GET /api/auth/me",
+                    "Use Suspense with fallback spinner wrapping route components"
+                  ]
+                },
+                {
+                  "path": "frontend/public/icons/icon-192.png",
+                  "description": "192x192 placeholder PWA icon. Create using Python Pillow: Image.new('RGB', (192,192), '#4F46E5').save('icon-192.png'). Run this script once."
+                },
+                {
+                  "path": "frontend/public/icons/icon-512.png",
+                  "description": "512x512 placeholder PWA icon."
+                },
+                {
+                  "path": "frontend/public/icons/icon-180.png",
+                  "description": "180x180 Apple touch icon."
+                },
+                {
+                  "path": "frontend/nginx.conf",
+                  "description": "Nginx config for prod container. Listen 3000, try_files $uri $uri/ /index.html for SPA routing.",
+                  "code_pattern": "server {\n  listen 3000;\n  root /usr/share/nginx/html;\n  index index.html;\n  gzip on;\n  gzip_types text/css application/javascript application/json;\n  location / {\n    try_files $uri $uri/ /index.html;\n  }\n  location ~* \\.(js|css|png|ico|svg|woff2)$ {\n    expires 1y;\n    add_header Cache-Control 'public, immutable';\n  }\n}\n"
+                },
+                {
+                  "path": "frontend/Dockerfile",
+                  "description": "Multi-stage: node:20-alpine builds, nginx:alpine serves.",
+                  "code_pattern": "FROM node:20-alpine AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nRUN npm run build\n\nFROM nginx:alpine\nCOPY --from=build /app/dist /usr/share/nginx/html\nCOPY nginx.conf /etc/nginx/conf.d/default.conf\nEXPOSE 3000\n"
+                }
+              ],
+              "acceptance_check": [
+                "cd frontend && npm run build && echo 'Build succeeded'",
+                "cd frontend && npm run dev & sleep 5 && curl -s http://localhost:5173 | grep -i familyhub && kill %1",
+                "docker compose up -d --build web && curl -k https://familyhub.local | grep -i familyhub",
+                "Open Chrome DevTools → Application → Manifest → verify all fields present"
+              ],
+              "gotchas": [
+                "nginx.conf try_files fallback is REQUIRED for React Router to work on direct URL navigation. Without it, /tasks returns 404.",
+                "The axios 401 interceptor imports useAuthStore but that causes a circular import. Use a lazy import: const { useAuthStore } = await import('../stores/auth'). Or use a simple window.location.href redirect without the store.",
+                "PWA icons must exist at the paths listed in the manifest BEFORE building or the service worker will log errors.",
+                "withCredentials: true on axios is required for the httpOnly cookie to be sent cross-origin (Caddy proxy counts as same-origin in this setup, but it is still required)."
+              ]
+            },
+            {
+              "id": "task_1_1_5",
+              "title": "Initial database schema migration (families, users, sessions)",
+              "type": ["DB"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_3"],
+              "objective": "SQLAlchemy models and Alembic migration for families, users, sessions tables. UUIDs as TEXT, all timestamps UTC, enums as VARCHAR.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/models/__init__.py",
+                  "description": "Empty init"
+                },
+                {
+                  "path": "backend/app/models/auth.py",
+                  "description": "SQLAlchemy ORM models for Family, User, Session.",
+                  "code_pattern": "import uuid\nfrom datetime import datetime, timezone\nfrom sqlalchemy import Column, String, DateTime, Boolean, Text, ForeignKey\nfrom sqlalchemy.dialects.sqlite import JSON\nfrom sqlalchemy.orm import relationship\nfrom app.core.database import Base\n\ndef utcnow(): return datetime.now(timezone.utc)\ndef new_uuid(): return str(uuid.uuid4())\n\nclass Family(Base):\n    __tablename__ = 'families'\n    id = Column(String, primary_key=True, default=new_uuid)\n    name = Column(String(200), nullable=False)\n    timezone = Column(String(100), default='UTC')\n    settings_json = Column(JSON, default=dict)\n    created_at = Column(DateTime(timezone=True), default=utcnow)\n    users = relationship('User', back_populates='family')\n\nclass User(Base):\n    __tablename__ = 'users'\n    id = Column(String, primary_key=True, default=new_uuid)\n    family_id = Column(String, ForeignKey('families.id'), nullable=False)\n    display_name = Column(String(100), nullable=False)\n    role = Column(String(20), nullable=False)  # admin|co_admin|teen|child|guest\n    avatar_type = Column(String(10), default='emoji')  # photo|emoji\n    avatar_value = Column(String(200), default='👤')\n    color_hex = Column(String(7), default='#4F46E5')\n    ui_mode = Column(String(10), default='standard')  # standard|child|kiosk\n    pin_hash = Column(String(200), nullable=True)\n    password_hash = Column(String(200), nullable=True)\n    settings_json = Column(JSON, default=dict)\n    is_deleted = Column(Boolean, default=False)\n    created_at = Column(DateTime(timezone=True), default=utcnow)\n    last_login_at = Column(DateTime(timezone=True), nullable=True)\n    family = relationship('Family', back_populates='users')\n\nclass Session(Base):\n    __tablename__ = 'sessions'\n    id = Column(String, primary_key=True, default=new_uuid)\n    user_id = Column(String, ForeignKey('users.id'), nullable=False)\n    token_hash = Column(String(200), nullable=False, unique=True)\n    device_hint = Column(String(200), nullable=True)\n    expires_at = Column(DateTime(timezone=True), nullable=False)\n    created_at = Column(DateTime(timezone=True), default=utcnow)\n"
+                },
+                {
+                  "path": "backend/alembic/versions/001_initial_schema.py",
+                  "description": "Alembic migration creating families, users, sessions tables. Generate with: alembic revision --autogenerate -m '001_initial_schema'. Review and clean up the generated file.",
+                  "key_points": [
+                    "After autogenerate, verify the migration creates all three tables",
+                    "Verify foreign key from users.family_id to families.id is present",
+                    "Verify downgrade() drops tables in correct order (sessions first, then users, then families)"
+                  ]
+                }
+              ],
+              "shell_commands": [
+                {
+                  "description": "Generate migration after creating models",
+                  "command": "source .venv/bin/activate && alembic revision --autogenerate -m '001_initial_schema'",
+                  "cwd": "backend"
+                },
+                {
+                  "description": "Apply migration",
+                  "command": "source .venv/bin/activate && DATABASE_URL='sqlite+aiosqlite:///test.db' alembic upgrade head",
+                  "cwd": "backend"
+                },
+                {
+                  "description": "Test rollback",
+                  "command": "source .venv/bin/activate && DATABASE_URL='sqlite+aiosqlite:///test.db' alembic downgrade -1",
+                  "cwd": "backend"
+                }
+              ],
+              "acceptance_check": [
+                "sqlite3 test.db '.tables' | grep -E 'families|users|sessions'",
+                "sqlite3 test.db '.schema users' | grep 'pin_hash'"
+              ],
+              "gotchas": [
+                "If alembic detects no changes, the models are not imported in env.py. Add: from app.models import auth in alembic/env.py.",
+                "SQLite stores DateTime as UTC ISO strings. Always use timezone-aware datetimes (datetime.now(timezone.utc)) not naive ones.",
+                "The alembic.ini script_location must point to alembic/ (relative to where you run alembic from). Run alembic from the backend/ directory."
+              ]
+            },
+            {
+              "id": "task_1_1_6",
+              "title": "Smoke test suite setup",
+              "type": ["TEST"],
+              "is_blocker": false,
+              "depends_on": ["task_1_1_3", "task_1_1_5"],
+              "objective": "pytest + pytest-asyncio test infrastructure with in-memory SQLite. Tests for /api/health endpoint. CI integration.",
+              "files_to_create": [
+                {
+                  "path": "backend/pytest.ini",
+                  "content": "[pytest]\nasyncio_mode = auto\ntestpaths = tests\n"
+                },
+                {
+                  "path": "backend/tests/__init__.py",
+                  "description": "Empty init"
+                },
+                {
+                  "path": "backend/tests/conftest.py",
+                  "description": "Async test client fixture with in-memory SQLite, overrides get_db dependency.",
+                  "code_pattern": "import pytest\nimport pytest_asyncio\nfrom httpx import AsyncClient, ASGITransport\nfrom sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker\nfrom app.main import app\nfrom app.core.database import Base, get_db\n\nTEST_DB_URL = 'sqlite+aiosqlite:///:memory:'\n\n@pytest_asyncio.fixture(scope='session')\nasync def db_engine():\n    engine = create_async_engine(TEST_DB_URL)\n    async with engine.begin() as conn:\n        await conn.run_sync(Base.metadata.create_all)\n    yield engine\n    await engine.dispose()\n\n@pytest_asyncio.fixture\nasync def db_session(db_engine):\n    factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)\n    async with factory() as session:\n        yield session\n        await session.rollback()\n\n@pytest_asyncio.fixture\nasync def client(db_session):\n    async def override_get_db():\n        yield db_session\n    app.dependency_overrides[get_db] = override_get_db\n    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:\n        yield ac\n    app.dependency_overrides.clear()\n"
+                },
+                {
+                  "path": "backend/tests/test_health.py",
+                  "code_pattern": "import pytest\n\n@pytest.mark.asyncio\nasync def test_health_returns_ok(client):\n    resp = await client.get('/api/health')\n    assert resp.status_code == 200\n    data = resp.json()\n    assert data['status'] == 'ok'\n    assert 'version' in data\n"
+                }
+              ],
+              "shell_commands": [
+                {
+                  "description": "Install test dependencies",
+                  "command": "source .venv/bin/activate && pip install pytest pytest-asyncio httpx",
+                  "cwd": "backend"
+                },
+                {
+                  "description": "Run tests",
+                  "command": "source .venv/bin/activate && pytest tests/ -v",
+                  "cwd": "backend"
+                }
+              ],
+              "acceptance_check": [
+                "cd backend && pytest tests/ -v | grep 'PASSED'",
+                "cd backend && pytest tests/ -v | grep '1 passed'"
+              ],
+              "gotchas": [
+                "The conftest scope='session' engine fixture means one DB per test run. If tests mutate data, use scope='function' for the db_session fixture.",
+                "APScheduler and Alembic both run in the lifespan. The test client does NOT invoke lifespan by default with httpx AsyncClient. Pass raise_app_exceptions=True to ASGITransport."
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sprint_1_2",
+          "title": "Authentication & First-Run Setup",
+          "weeks": "2-3",
+          "goal": "Family can create accounts, log in with PIN or password, and complete the setup wizard.",
+          "tasks": [
+            {
+              "id": "task_1_2_1",
+              "title": "Auth API endpoints",
+              "type": ["BE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_3", "task_1_1_5"],
+              "objective": "POST /api/auth/setup, POST /api/auth/login, POST /api/auth/login/pin, POST /api/auth/logout, GET /api/auth/me, GET /api/auth/setup/status. JWT in httpOnly cookie. PIN rate limiting.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/schemas/__init__.py", "description": "Empty init"
+                },
+                {
+                  "path": "backend/app/schemas/auth.py",
+                  "description": "Pydantic request/response schemas for auth endpoints.",
+                  "code_pattern": "from pydantic import BaseModel, Field\n\nclass SetupRequest(BaseModel):\n    family_name: str = Field(min_length=1, max_length=200)\n    timezone: str\n    admin_display_name: str = Field(min_length=1, max_length=100)\n    admin_password: str = Field(min_length=8)\n\nclass LoginRequest(BaseModel):\n    display_name: str\n    password: str\n\nclass PinLoginRequest(BaseModel):\n    user_id: str\n    pin: str = Field(min_length=4, max_length=8)\n\nclass UserResponse(BaseModel):\n    id: str\n    display_name: str\n    role: str\n    color_hex: str\n    ui_mode: str\n    avatar_type: str\n    avatar_value: str\n    family_id: str\n\n    class Config:\n        from_attributes = True\n"
+                },
+                {
+                  "path": "backend/app/routers/__init__.py", "description": "Empty init"
+                },
+                {
+                  "path": "backend/app/routers/auth.py",
+                  "description": "All auth endpoints. Sets JWT as httpOnly SameSite=Strict cookie with 30-day expiry on successful login.",
+                  "key_points": [
+                    "POST /api/auth/setup: check family count=0, create family row, create admin user with hashed password, return UserResponse + set cookie",
+                    "POST /api/auth/login: find user by display_name (case-insensitive), verify password, set cookie",
+                    "POST /api/auth/login/pin: call check_pin_rate_limit first, find user, verify PIN, set cookie",
+                    "POST /api/auth/logout: delete cookie by setting max_age=0",
+                    "GET /api/auth/me: use get_current_user dependency, return UserResponse",
+                    "GET /api/auth/setup/status: count families table, return {setup_complete: bool}",
+                    "Cookie settings: httponly=True, secure=True, samesite='strict', max_age=60*60*24*30"
+                  ]
+                }
+              ],
+              "files_to_modify": [
+                {
+                  "path": "backend/app/main.py",
+                  "changes": ["Import and include auth router: app.include_router(auth_router, prefix='')"]
+                }
+              ],
+              "acceptance_check": [
+                "curl -sk -X POST https://familyhub.local/api/auth/setup -H 'Content-Type: application/json' -d '{\"family_name\":\"Test\",\"timezone\":\"UTC\",\"admin_display_name\":\"Admin\",\"admin_password\":\"password123\"}' | grep display_name",
+                "curl -sk -c cookies.txt -X POST https://familyhub.local/api/auth/login -H 'Content-Type: application/json' -d '{\"display_name\":\"Admin\",\"password\":\"password123\"}' && curl -sk -b cookies.txt https://familyhub.local/api/auth/me | grep Admin"
+              ],
+              "gotchas": [
+                "secure=True on cookies requires HTTPS. In development without Caddy, temporarily use secure=False. Never merge to production with secure=False.",
+                "display_name lookup should be case-insensitive. Use func.lower() in SQLAlchemy: where(func.lower(User.display_name) == name.lower())"
+              ]
+            },
+            {
+              "id": "task_1_2_2",
+              "title": "User management API",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_2_1"],
+              "objective": "CRUD for family member profiles. GET/POST/PATCH/DELETE /api/users. Avatar upload with Pillow thumbnail generation.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/services/__init__.py", "description": "Empty init"
+                },
+                {
+                  "path": "backend/app/services/users.py",
+                  "description": "User CRUD business logic. generate_avatar_thumbnail() using asyncio.to_thread + Pillow.",
+                  "code_pattern": "import asyncio\nimport uuid\nfrom pathlib import Path\nfrom PIL import Image\n\nasync def generate_thumbnail(source_path: str, dest_path: str, size: tuple[int,int]) -> None:\n    def _resize():\n        with Image.open(source_path) as img:\n            img.thumbnail(size, Image.LANCZOS)\n            img.save(dest_path, 'JPEG', quality=85)\n    await asyncio.to_thread(_resize)\n"
+                },
+                {
+                  "path": "backend/app/routers/users.py",
+                  "description": "All user endpoints. GET /api/users/public (no auth, returns display_name+avatar only for login page). Full CRUD requires auth.",
+                  "key_points": [
+                    "GET /api/users: requires any authenticated user, returns all non-deleted users",
+                    "GET /api/users/public: NO auth required, returns only id, display_name, avatar_type, avatar_value, color_hex",
+                    "POST /api/users: require_role('admin','co_admin')",
+                    "PATCH /api/users/{id}: own profile OR admin",
+                    "DELETE /api/users/{id}: admin only, set is_deleted=True, cannot delete self",
+                    "POST /api/users/{id}/avatar: save to /data/photos/avatars/{id}.jpg, thumbnail to /data/photos/avatars/{id}_thumb.jpg"
+                  ]
+                }
+              ],
+              "acceptance_check": [
+                "curl -sk https://familyhub.local/api/users/public | grep display_name",
+                "curl -sk -b cookies.txt -X POST https://familyhub.local/api/users -H 'Content-Type: application/json' -d '{\"display_name\":\"Child1\",\"role\":\"child\",\"pin\":\"1234\"}' | grep Child1"
+              ],
+              "gotchas": [
+                "The /api/users/public endpoint MUST return no sensitive fields. Never return pin_hash or password_hash. Only id, display_name, avatar_type, avatar_value, color_hex.",
+                "When creating a child user, pin is provided but password may be null. Handle nullable password_hash gracefully in login endpoint."
+              ]
+            },
+            {
+              "id": "task_1_2_3",
+              "title": "Setup wizard frontend",
+              "type": ["FE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_4", "task_1_2_1"],
+              "objective": "3-step setup wizard shown on first run. Step 1: household name + timezone. Step 2: admin account. Step 3: confirm + submit. App.tsx routing logic to direct to /setup, /login, or /dashboard on load.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/pages/SetupWizard.tsx",
+                  "description": "Multi-step form component. Local state for step (1|2|3) and form data. Calls POST /api/auth/setup on final submit. Timezone picker uses Intl.supportedValuesOf('timeZone') filtered to common zones with search.",
+                  "key_points": [
+                    "Disable submit button while mutation isPending",
+                    "Show error message from API on failure",
+                    "On success: call setUser() with returned user, navigate('/dashboard')",
+                    "Password confirmation: validate passwords match before submitting",
+                    "Use shadcn/ui Card, Input, Button, Select components"
+                  ]
+                }
+              ],
+              "files_to_modify": [
+                {
+                  "path": "frontend/src/App.tsx",
+                  "changes": [
+                    "On mount useEffect: GET /api/auth/setup/status. If setup_complete=false → navigate('/setup'). Else GET /api/auth/me. If 401 → navigate('/login'). If 200 → setUser(data), navigate based on stored last route or '/dashboard'.",
+                    "Add /setup route rendering SetupWizard"
+                  ]
+                }
+              ],
+              "acceptance_check": [
+                "Navigate to https://familyhub.local on fresh install → redirects to /setup",
+                "Complete all 3 steps → redirects to /dashboard",
+                "Second visit → redirects to /login (setup already done)"
+              ],
+              "gotchas": [
+                "Intl.supportedValuesOf('timeZone') is not available on older browsers. Feature-detect and fall back to a hardcoded list of 50 common timezones.",
+                "After completing setup, call GET /api/auth/me again to populate the auth store — the setup endpoint returns the user too but make sure the store is populated before navigating."
+              ]
+            },
+            {
+              "id": "task_1_2_4",
+              "title": "Login page",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_2_3"],
+              "objective": "Login page showing family member avatar cards. Tap card → PIN pad or password field. Calls POST /api/auth/login/pin or /api/auth/login. 56px minimum tap targets.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/pages/Login.tsx",
+                  "description": "Family member grid + PIN pad or password form on selection.",
+                  "key_points": [
+                    "Load users from GET /api/users/public (no auth needed)",
+                    "Show avatar cards in a grid: min 120x120px, avatar image or emoji large, display_name below",
+                    "On card tap: set selectedUser state, show PIN pad or password input",
+                    "PIN pad: custom numpad grid (3x3+0+delete), NOT <input type='number'>. State is a string built digit by digit.",
+                    "Auto-submit when PIN reaches expected length (4-8 chars) — check user's pin_hash is set to determine which to show",
+                    "Show attempt counter and lockout message from API 429 response",
+                    "Back button returns to user grid"
+                  ]
+                }
+              ],
+              "acceptance_check": [
+                "Navigate to /login → avatar cards visible",
+                "Tap child card → PIN pad appears",
+                "Enter wrong PIN 5 times → lockout message with countdown"
+              ]
+            },
+            {
+              "id": "task_1_2_5",
+              "title": "User management admin screens",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_2_2", "task_1_2_4"],
+              "objective": "Admin screen to add/edit/delete family members. Role selector, color picker, PIN/password fields. Guarded to admin role only.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/pages/admin/ManageUsers.tsx",
+                  "description": "Admin user management with member list, add/edit drawer using shadcn Dialog, delete confirmation.",
+                  "key_points": [
+                    "Redirect to /dashboard if current user is not admin or co_admin",
+                    "Color picker: 8 preset hex swatches rendered as 32x32 colored circles with selected ring",
+                    "Role descriptions displayed under role selector",
+                    "shadcn/ui Sheet (side='right') for add/edit form"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sprint_1_3",
+          "title": "Calendar & Tasks Core",
+          "weeks": "3-5",
+          "goal": "Internal calendar working, Google Calendar syncing, tasks creatable and completable.",
+          "tasks": [
+            {
+              "id": "task_1_3_1",
+              "title": "Calendar and task schema migration",
+              "type": ["DB"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_5"],
+              "objective": "Alembic migration 002 creating calendar_sources, calendar_events, tasks, task_completions tables.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/models/calendar.py",
+                  "description": "CalendarSource, CalendarEvent SQLAlchemy models.",
+                  "key_points": [
+                    "CalendarSource: id, family_id FK, provider (String enum: internal/google/microsoft/apple/ical), display_name, color_hex, sync_direction (String: read/write/bidirectional), credentials_encrypted (Text nullable), last_synced_at, sync_error, enabled (bool default True)",
+                    "CalendarEvent: id, source_id FK, external_id (nullable unique per source), title, start_dt (DateTime UTC), end_dt, all_day (bool), location, description, recurrence_rule (Text nullable), color_label, created_by FK users, assignee_ids (JSON list), category_tag, last_modified, is_deleted"
+                  ]
+                },
+                {
+                  "path": "backend/app/models/tasks.py",
+                  "description": "Task, TaskCompletion SQLAlchemy models.",
+                  "key_points": [
+                    "Task: id, family_id FK, title, description, assignee_id FK nullable, due_date (DateTime nullable), recurrence_rule (Text nullable), status (String: pending/in_progress/completed/verified/rejected/overdue/skipped/archived), priority (String: low/medium/high/urgent default medium), area_tag, category_tag, points (Integer default 0), parent_task_id FK nullable self-referential, estimated_minutes, created_by FK, created_at, updated_at, is_deleted",
+                    "TaskCompletion: id, task_id FK, completed_by FK users, completed_at, notes, photo_path, verified_by FK nullable, verified_at, verification_status (String: pending/approved/rejected), rejection_reason"
+                  ]
+                },
+                {
+                  "path": "backend/alembic/versions/002_calendar_tasks.py",
+                  "description": "Autogenerated migration for calendar and task tables. Run: alembic revision --autogenerate -m '002_calendar_tasks'"
+                }
+              ],
+              "shell_commands": [
+                {
+                  "description": "Generate migration after creating models — remember to import new models in alembic/env.py first",
+                  "command": "source .venv/bin/activate && alembic revision --autogenerate -m '002_calendar_tasks'",
+                  "cwd": "backend"
+                }
+              ]
+            },
+            {
+              "id": "task_1_3_2",
+              "title": "Internal calendar API",
+              "type": ["BE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_3_1"],
+              "objective": "Calendar event CRUD. GET events by date range with RRULE expansion. Calendar sources CRUD.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/services/calendar.py",
+                  "description": "Calendar business logic: expand_recurring_events(), create_internal_source_if_needed().",
+                  "code_pattern": "from dateutil.rrule import rrulestr\nfrom datetime import datetime\n\ndef expand_recurring(base_event, range_start: datetime, range_end: datetime) -> list:\n    if not base_event.recurrence_rule:\n        return []\n    rule = rrulestr(base_event.recurrence_rule, dtstart=base_event.start_dt)\n    duration = base_event.end_dt - base_event.start_dt\n    occurrences = []\n    for dt in rule.between(range_start, range_end, inc=True):\n        occ = base_event.__dict__.copy()\n        occ['id'] = f'{base_event.id}_{dt.isoformat()}'\n        occ['start_dt'] = dt\n        occ['end_dt'] = dt + duration\n        occ['is_recurring_instance'] = True\n        occurrences.append(occ)\n    return occurrences\n"
+                },
+                {
+                  "path": "backend/app/routers/calendar.py",
+                  "description": "Calendar event and source routes.",
+                  "key_points": [
+                    "GET /api/calendar/events: params start, end (required ISO dates), assignee_id, source_id. Return base events + expanded recurrences in range.",
+                    "POST /api/calendar/events: creates in internal source (auto-create if not exists). admin/co_admin/teen roles.",
+                    "GET/PATCH/DELETE /api/calendar/events/{id}: standard CRUD with soft delete.",
+                    "GET /api/calendar/sources: list family sources.",
+                    "POST /api/calendar/sources: admin only."
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_1_3_3",
+              "title": "Google Calendar OAuth2 integration",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_2"],
+              "objective": "Google OAuth2 flow, token storage (encrypted), incremental event sync background job.",
+              "prerequisite": "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in .env before this task can be tested end-to-end. Register OAuth app at console.cloud.google.com first.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/integrations/__init__.py", "description": "Empty init"
+                },
+                {
+                  "path": "backend/app/integrations/google_calendar.py",
+                  "description": "Google Calendar OAuth2 integration using google-auth-oauthlib and googleapiclient.",
+                  "key_points": [
+                    "get_auth_url(state): use Flow.from_client_config with prompt='consent' and access_type='offline' to always get refresh token",
+                    "exchange_code(code): get tokens, store encrypted in calendar_source.credentials_encrypted",
+                    "refresh_if_needed(credentials): check expiry, refresh if within 5 minutes of expiry",
+                    "list_calendars(credentials): return [{id, name, color}]",
+                    "sync_events(source): use Events.list with syncToken for incremental sync. On 410 Gone (token expired), do full sync. Handle deleted events (status='cancelled').",
+                    "push_event(credentials, cal_id, event): create/update event in Google Calendar for bidirectional sync."
+                  ]
+                },
+                {
+                  "path": "backend/app/jobs/calendar_sync.py",
+                  "description": "APScheduler interval job syncing all enabled calendar sources every CALENDAR_SYNC_INTERVAL_MINUTES.",
+                  "code_pattern": "from apscheduler.schedulers.asyncio import AsyncIOScheduler\nfrom app.core.database import AsyncSessionLocal\nfrom app.core.config import settings\nimport logging\n\nlogger = logging.getLogger(__name__)\n\nasync def sync_all_calendars():\n    async with AsyncSessionLocal() as db:\n        from sqlalchemy import select\n        from app.models.calendar import CalendarSource\n        result = await db.execute(\n            select(CalendarSource).where(CalendarSource.enabled == True)\n        )\n        sources = result.scalars().all()\n        for source in sources:\n            try:\n                await sync_one_source(source, db)\n            except Exception as e:\n                logger.error('Sync failed for source %s: %s', source.id, e)\n                source.sync_error = str(e)\n                await db.commit()\n\ndef register_calendar_sync_jobs(scheduler: AsyncIOScheduler):\n    scheduler.add_job(\n        sync_all_calendars,\n        'interval',\n        minutes=settings.calendar_sync_interval_minutes,\n        id='calendar_sync',\n        replace_existing=True\n    )\n"
+                },
+                {
+                  "path": "backend/app/routers/integrations.py",
+                  "description": "OAuth callback routes for all calendar providers.",
+                  "key_points": [
+                    "GET /api/integrations/google/auth-url: admin only, return {url: str}",
+                    "GET /api/integrations/google/callback: exchange code, fetch calendar list, create CalendarSource rows, redirect to /settings/calendars",
+                    "DELETE /api/integrations/google/{source_id}: admin only, delete source and clear credentials"
+                  ]
+                }
+              ],
+              "files_to_modify": [
+                {
+                  "path": "backend/app/main.py",
+                  "changes": ["In lifespan, after scheduler.start(): from app.jobs.calendar_sync import register_calendar_sync_jobs; register_calendar_sync_jobs(scheduler)"]
+                }
+              ]
+            },
+            {
+              "id": "task_1_3_4",
+              "title": "Tasks API",
+              "type": ["BE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_3_1"],
+              "objective": "Full task CRUD. Mark complete with photo attachment. Admin verify/reject. Recurring task next-instance generation. Hourly overdue check job.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/services/tasks.py",
+                  "description": "Task business logic: next_occurrence(), complete_task(), generate_recurring_next_instance().",
+                  "code_pattern": "from dateutil.rrule import rrulestr\nfrom datetime import datetime, timezone\n\ndef next_occurrence(rrule_str: str, after: datetime) -> datetime | None:\n    try:\n        rule = rrulestr(rrule_str, dtstart=after)\n        return rule.after(after)\n    except Exception:\n        return None\n"
+                },
+                {
+                  "path": "backend/app/routers/tasks.py",
+                  "description": "All task endpoints.",
+                  "key_points": [
+                    "GET /api/tasks: filter by assignee_id, status, due_before, due_after, area_tag. Non-admin sees only their own.",
+                    "POST /api/tasks: admin/co_admin only",
+                    "PATCH /api/tasks/{id}: admin/co_admin only",
+                    "DELETE /api/tasks/{id}: admin only, soft delete",
+                    "POST /api/tasks/{id}/complete: any user if they are the assignee OR admin. Accept multipart with notes and optional photo file. Save photo to /data/photos/completions/{task_id}/{timestamp}.jpg. Create TaskCompletion row. If task has recurrence_rule, call generate_recurring_next_instance(). Emit task_updated to event_bus.",
+                    "POST /api/tasks/{id}/verify: admin/co_admin. Update verification_status on latest completion.",
+                    "GET /api/tasks/{id}/completions: list completion history."
+                  ]
+                },
+                {
+                  "path": "backend/app/jobs/tasks.py",
+                  "description": "check_overdue_tasks() APScheduler cron job running every hour. Updates status=overdue on tasks past due_date with status=pending.",
+                  "code_pattern": "async def check_overdue_tasks():\n    async with AsyncSessionLocal() as db:\n        from sqlalchemy import update\n        from app.models.tasks import Task\n        from datetime import datetime, timezone\n        now = datetime.now(timezone.utc)\n        stmt = (\n            update(Task)\n            .where(Task.due_date < now, Task.status == 'pending', Task.is_deleted == False)\n            .values(status='overdue')\n        )\n        await db.execute(stmt)\n        await db.commit()\n"
+                }
+              ]
+            },
+            {
+              "id": "task_1_3_5",
+              "title": "Calendar UI (Day/Week/Month/Agenda views)",
+              "type": ["FE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_3_2", "task_1_2_4"],
+              "objective": "Full calendar UI using react-big-calendar or @schedule-x/react. Four views, event creation form, touch swipe navigation, assignee filter chips.",
+              "packages_to_install_fe": ["react-big-calendar", "date-fns", "@use-gesture/react"],
+              "files_to_create": [
+                {
+                  "path": "frontend/src/api/calendar.ts",
+                  "description": "TanStack Query hooks for calendar events and sources.",
+                  "key_points": [
+                    "useCalendarEvents(start, end, filters): GET /api/calendar/events with date range params",
+                    "useCreateEvent: POST /api/calendar/events, invalidates events query on success",
+                    "usePatchEvent: PATCH, useDeleteEvent: DELETE",
+                    "useCalendarSources: GET /api/calendar/sources"
+                  ]
+                },
+                {
+                  "path": "frontend/src/pages/Calendar.tsx",
+                  "description": "Calendar page with view switcher, react-big-calendar, event detail drawer, new event FAB, member filter chips.",
+                  "key_points": [
+                    "View state: 'month'|'week'|'day'|'agenda' persisted to localStorage",
+                    "Pass localizer={dateFnsLocalizer({...})} to Calendar component",
+                    "Custom event component: colored pill with assignee avatar",
+                    "onSelectEvent: open event detail Sheet",
+                    "Member filter chips at top: toggle per-member event visibility",
+                    "Swipe: @use-gesture/react useDrag with 50px threshold to trigger prev/next navigation",
+                    "New event FAB: bottom-right fixed, opens Sheet with event form",
+                    "Event form fields: title (required), all-day toggle, start/end datetimepicker, location, description, assignees multi-select, recurrence select"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_1_3_6",
+              "title": "Tasks UI (My Tasks + Household Board)",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_4", "task_1_3_5"],
+              "objective": "Tasks page with My Tasks tab, Kanban board tab, By Person tab. Task detail sheet with completion flow and photo upload.",
+              "packages_to_install_fe": ["@dnd-kit/core", "@dnd-kit/sortable", "@dnd-kit/utilities"],
+              "files_to_create": [
+                {
+                  "path": "frontend/src/api/tasks.ts",
+                  "description": "TanStack Query hooks for tasks. useTasks, useCompleteTask (with optimistic update), useVerifyTask, useCreateTask, usePatchTask."
+                },
+                {
+                  "path": "frontend/src/components/tasks/TaskCard.tsx",
+                  "description": "Reusable task card. Props: task, onComplete, onTap. Complete button min 56x56px. Priority badge, area tag, points badge, assignee avatar.",
+                  "key_points": [
+                    "Complete button: entire right side of card (not just an icon), green checkmark",
+                    "Priority color: low=gray, medium=blue, high=amber, urgent=red — use left border color",
+                    "onComplete calls optimistic mutation then API"
+                  ]
+                },
+                {
+                  "path": "frontend/src/pages/Tasks.tsx",
+                  "description": "Three tabs: My Tasks (grouped by date), Board (Kanban DnD), By Person (admin accordion).",
+                  "key_points": [
+                    "My Tasks groups: Today / Tomorrow / This Week / Later / No due date. Each group collapsible.",
+                    "Kanban board: 4 columns (To Do/In Progress/Done/Verified). DndContext + SortableContext per column. onDragEnd calls PATCH task status.",
+                    "Task detail: shadcn Sheet. Shows all fields, subtask checklist, complete button, completion history timeline.",
+                    "Completion sheet: notes textarea, camera/file input (accept='image/*' capture='environment'), submit button.",
+                    "Camera input for photo: <input type='file' accept='image/*' capture='environment'>"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sprint_1_4",
+          "title": "Wall Display, PWA & Photo Slideshow",
+          "weeks": "5-8",
+          "goal": "Wall screen functional, PWA installable, photo slideshow running, backup automated.",
+          "tasks": [
+            {
+              "id": "task_1_4_1",
+              "title": "Photo and album schema migration",
+              "type": ["DB"],
+              "is_blocker": false,
+              "depends_on": ["task_1_1_5"],
+              "objective": "Alembic migration 003 creating photos, albums, album_photos tables.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/models/photos.py",
+                  "description": "Photo, Album, AlbumPhoto SQLAlchemy models.",
+                  "key_points": [
+                    "Photo: id, family_id FK, file_path, thumbnail_path, caption (nullable), taken_at (nullable from EXIF), uploaded_by FK, uploaded_at, tagged_user_ids (JSON list), exif_data (JSON nullable), is_deleted",
+                    "Album: id, family_id FK, name, cover_photo_id FK nullable, slideshow_eligible (bool default False), slideshow_transition (String: fade/slide/zoom default fade), slideshow_duration_s (Integer default 10), slideshow_order (String: sequential/random/date default sequential), show_captions (bool default True), created_by FK, created_at",
+                    "AlbumPhoto: album_id FK, photo_id FK, order_index Integer. Primary key: (album_id, photo_id). Use __table_args__ = (PrimaryKeyConstraint('album_id', 'photo_id'),)"
+                  ]
+                },
+                {
+                  "path": "backend/alembic/versions/003_photos.py",
+                  "description": "Autogenerated. Run: alembic revision --autogenerate -m '003_photos'"
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_2",
+              "title": "Photo and album API",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_4_1"],
+              "objective": "Photo upload (JPEG/PNG/HEIC), Pillow thumbnail generation, album CRUD, slideshow endpoint.",
+              "packages_to_install": ["pillow-heif"],
+              "files_to_create": [
+                {
+                  "path": "backend/app/services/photos.py",
+                  "description": "Photo processing: save_photo(), generate_thumbnail(), extract_exif_date(). HEIC registration on module load.",
+                  "code_pattern": "import asyncio\nimport uuid\nfrom pathlib import Path\nfrom datetime import datetime\nfrom PIL import Image\nfrom PIL.ExifTags import TAGS\nimport pillow_heif\n\npillow_heif.register_heif_opener()\n\nasync def process_upload(file_data: bytes, original_filename: str) -> dict:\n    ext = Path(original_filename).suffix.lower()\n    if ext in ('.heic', '.heif'):\n        ext = '.jpg'\n    photo_id = str(uuid.uuid4())\n    orig_path = f'/data/photos/originals/{photo_id}{ext}'\n    thumb_path = f'/data/photos/thumbnails/{photo_id}_thumb.jpg'\n    with open(orig_path, 'wb') as f:\n        f.write(file_data)\n    await asyncio.to_thread(_resize, orig_path, thumb_path, (400, 300))\n    taken_at = await asyncio.to_thread(_get_exif_date, orig_path)\n    return {'id': photo_id, 'file_path': orig_path, 'thumbnail_path': thumb_path, 'taken_at': taken_at}\n\ndef _resize(src, dst, size):\n    with Image.open(src) as img:\n        img.thumbnail(size, Image.LANCZOS)\n        img.save(dst, 'JPEG', quality=85)\n\ndef _get_exif_date(path: str) -> datetime | None:\n    try:\n        with Image.open(path) as img:\n            exif = img._getexif()\n            if exif:\n                for tag_id, val in exif.items():\n                    if TAGS.get(tag_id) == 'DateTimeOriginal':\n                        return datetime.strptime(val, '%Y:%m:%d %H:%M:%S')\n    except Exception:\n        return None\n"
+                },
+                {
+                  "path": "backend/app/routers/photos.py",
+                  "description": "Photo upload, list, update, delete. Album CRUD. GET /api/albums/{id}/slideshow returns ordered photos.",
+                  "key_points": [
+                    "POST /api/photos/upload: accept UploadFile, call process_upload, create Photo DB row, return photo record with URLs",
+                    "GET /api/albums/{id}/slideshow: returns photos in configured order (sequential=by order_index, random=shuffled, date=by taken_at). Only include photos not is_deleted."
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_3",
+              "title": "Photo album management UI",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_4_2"],
+              "objective": "Album grid, photo masonry grid, full-screen swipe viewer, multi-file upload with progress, album slideshow settings.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/pages/Photos.tsx",
+                  "description": "Albums grid, inside-album masonry, full-screen viewer, upload flow.",
+                  "key_points": [
+                    "Album grid: CSS grid auto-fill minmax(200px,1fr), cover photo thumbnail, album name, photo count badge",
+                    "Masonry inside album: CSS columns or grid with auto rows",
+                    "Full-screen viewer: portal-rendered fixed overlay, swipe via pointer events or @use-gesture/react, caption overlay at bottom",
+                    "Upload: multiple files sequential (not parallel), FormData per file, progress bar per file via axios onUploadProgress",
+                    "Album settings sheet: slideshow_eligible toggle, transition select, duration slider (5-60s), order select"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_4",
+              "title": "Wall display route (/wall)",
+              "type": ["FE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_3_5", "task_1_3_6", "task_1_4_3"],
+              "objective": "Full-screen wall display at /wall. Clock, today's events, per-person chore dots, photo slideshow. Idle mode. Quick-complete overlay. Touch-optimized 56px+ targets.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/wall/WallLayout.tsx",
+                  "description": "Root wall component. CSS grid layout. Manages idle timer. Renders panels.",
+                  "code_pattern": "import { useEffect, useRef, useState, useCallback } from 'react'\nimport { WallClock } from './WallClock'\nimport { WallEventStrip } from './WallEventStrip'\nimport { WallChoreStatus } from './WallChoreStatus'\nimport { WallPhotoSlideshow } from './WallPhotoSlideshow'\n\nconst IDLE_MS = (parseInt(import.meta.env.VITE_WALL_IDLE_TIMEOUT_SECONDS ?? '300')) * 1000\n\nexport function WallLayout() {\n  const [isIdle, setIsIdle] = useState(false)\n  const timerRef = useRef<ReturnType<typeof setTimeout>>()\n\n  const resetIdle = useCallback(() => {\n    clearTimeout(timerRef.current)\n    setIsIdle(false)\n    timerRef.current = setTimeout(() => setIsIdle(true), IDLE_MS)\n  }, [])\n\n  useEffect(() => {\n    document.addEventListener('touchstart', resetIdle, { passive: true })\n    document.addEventListener('mousemove', resetIdle)\n    resetIdle()\n    return () => {\n      document.removeEventListener('touchstart', resetIdle)\n      document.removeEventListener('mousemove', resetIdle)\n      clearTimeout(timerRef.current)\n    }\n  }, [resetIdle])\n\n  if (isIdle) {\n    return (\n      <div className='fixed inset-0 bg-black' onClick={resetIdle}>\n        <WallPhotoSlideshow fullscreen />\n        <WallClock className='absolute bottom-4 right-6 text-white opacity-80' />\n      </div>\n    )\n  }\n\n  return (\n    <div className='w-screen h-screen overflow-hidden grid grid-cols-2 grid-rows-[auto_1fr] gap-4 p-4 bg-gray-950 text-white'>\n      <WallClock />\n      <WallEventStrip />\n      <div className='col-span-2'><WallChoreStatus /></div>\n    </div>\n  )\n}\n"
+                },
+                {
+                  "path": "frontend/src/wall/WallClock.tsx",
+                  "description": "Large clock updating every second. Shows HH:MM and full date string.",
+                  "code_pattern": "import { useState, useEffect } from 'react'\n\nexport function WallClock({ className = '' }: { className?: string }) {\n  const [now, setNow] = useState(new Date())\n  useEffect(() => {\n    const id = setInterval(() => setNow(new Date()), 1000)\n    return () => clearInterval(id)\n  }, [])\n  const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })\n  const date = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })\n  return (\n    <div className={`flex flex-col ${className}`}>\n      <span className='text-7xl font-bold tracking-tight font-mono'>{time}</span>\n      <span className='text-2xl text-gray-400 mt-1'>{date}</span>\n    </div>\n  )\n}\n"
+                },
+                {
+                  "path": "frontend/src/wall/WallEventStrip.tsx",
+                  "description": "Today's events as colored pills. Polls /api/calendar/events every 60s. Sorts by start time.",
+                  "key_points": [
+                    "useQuery with refetchInterval: 60_000",
+                    "Each event: colored left border matching source color_hex, time, title",
+                    "Show max 8 events with 'and N more' overflow",
+                    "Show 'No events today' if empty"
+                  ]
+                },
+                {
+                  "path": "frontend/src/wall/WallChoreStatus.tsx",
+                  "description": "Per-person chore completion grid. Each person: avatar, name, dot per task (filled=done, empty=pending). Tapping a pending dot opens WallQuickComplete.",
+                  "key_points": [
+                    "Load tasks with status pending/completed for today",
+                    "Group by assignee_id",
+                    "Dot size minimum 24px with 8px gap (touchable via overlay)",
+                    "Completed dots: green filled circle, pending: outlined circle",
+                    "Tapping any dot in a person's row opens WallQuickComplete with that person pre-selected"
+                  ]
+                },
+                {
+                  "path": "frontend/src/wall/WallQuickComplete.tsx",
+                  "description": "Full-screen touch overlay for quick task completion. Shows task title, large Mark Complete button, optional PIN pad.",
+                  "key_points": [
+                    "Overlay: fixed inset-0 bg-black/70 z-50",
+                    "Mark Complete button: minimum 120x80px, green",
+                    "If user requires PIN: show PIN pad after button tap, verify, then call complete",
+                    "On success: brief green checkmark animation, close overlay, invalidate tasks query",
+                    "Close X button top-right min 56x56px"
+                  ]
+                },
+                {
+                  "path": "frontend/src/wall/WallPhotoSlideshow.tsx",
+                  "description": "Cycling photo slideshow. Fetches slideshow-eligible albums and their photos. CSS transition for fade. Shows caption overlay.",
+                  "code_pattern": "import { useState, useEffect } from 'react'\nimport { useQuery } from '@tanstack/react-query'\nimport { apiClient } from '../api/client'\n\nexport function WallPhotoSlideshow({ fullscreen = false }: { fullscreen?: boolean }) {\n  const [idx, setIdx] = useState(0)\n  const [visible, setVisible] = useState(true)\n\n  const { data: albums } = useQuery({\n    queryKey: ['slideshow-albums'],\n    queryFn: () => apiClient.get('/albums').then(r => r.data.filter((a: any) => a.slideshow_eligible))\n  })\n\n  // Flatten photos from all slideshow albums\n  const photos = albums?.flatMap((a: any) => a.photos ?? []) ?? []\n\n  useEffect(() => {\n    if (photos.length === 0) return\n    const duration = (albums?.[0]?.slideshow_duration_s ?? 10) * 1000\n    const id = setInterval(() => {\n      setVisible(false)\n      setTimeout(() => {\n        setIdx(i => (i + 1) % photos.length)\n        setVisible(true)\n      }, 600)\n    }, duration)\n    return () => clearInterval(id)\n  }, [photos.length, albums])\n\n  if (photos.length === 0) return <div className='bg-gray-900 flex items-center justify-center text-gray-600'>No photos</div>\n\n  const photo = photos[idx]\n  return (\n    <div className={`relative ${fullscreen ? 'w-full h-full' : 'w-full h-full'} overflow-hidden bg-black`}>\n      <img\n        src={`/photos/thumbnails/${photo.id}_thumb.jpg`}\n        className={`w-full h-full object-cover transition-opacity duration-500 ${visible ? 'opacity-100' : 'opacity-0'}`}\n        alt={photo.caption ?? ''}\n      />\n      {photo.caption && (\n        <div className='absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 p-4 text-white text-lg'>\n          {photo.caption}\n        </div>\n      )}\n    </div>\n  )\n}\n"
+                }
+              ],
+              "files_to_modify": [
+                {
+                  "path": "frontend/src/App.tsx",
+                  "changes": ["Route /wall renders <WallLayout /> with no navigation wrapper (separate layout from main app)"]
+                }
+              ],
+              "acceptance_check": [
+                "Navigate to https://familyhub.local/wall at 1920x1080 — no scrollbars, all panels visible",
+                "Clock updates every second",
+                "Wait 5 minutes — slideshow fills screen",
+                "Touch screen — returns to wall layout",
+                "Complete a task on the phone — wall dot turns green within 5 seconds"
+              ],
+              "gotchas": [
+                "The /wall route must be outside any auth guard — the wall screen should always be visible without login.",
+                "Photo thumbnail URLs: the static mount is at /photos/, so a file at /data/photos/thumbnails/abc_thumb.jpg is served at /photos/thumbnails/abc_thumb.jpg.",
+                "CSS font-mono for the clock renders at a consistent character width, preventing layout shifts as digits change."
+              ]
+            },
+            {
+              "id": "task_1_4_5",
+              "title": "WebSocket endpoint for real-time wall updates",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_4"],
+              "objective": "FastAPI WebSocket endpoint at /api/ws/wall. ConnectionManager broadcasts to all connected clients when tasks or events change.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/routers/ws.py",
+                  "description": "WebSocket route and ConnectionManager.",
+                  "code_pattern": "from fastapi import APIRouter, WebSocket, WebSocketDisconnect\nfrom app.core.events import event_bus\nimport logging\n\nrouter = APIRouter()\nlogger = logging.getLogger(__name__)\n\nclass ConnectionManager:\n    def __init__(self):\n        self.active: list[WebSocket] = []\n\n    async def connect(self, ws: WebSocket):\n        await ws.accept()\n        self.active.append(ws)\n        logger.info('Wall WS connected. Total: %d', len(self.active))\n\n    def disconnect(self, ws: WebSocket):\n        if ws in self.active:\n            self.active.remove(ws)\n\n    async def broadcast(self, message: dict):\n        dead = []\n        for ws in self.active:\n            try:\n                await ws.send_json(message)\n            except Exception:\n                dead.append(ws)\n        for ws in dead:\n            self.active.remove(ws)\n\nmanager = ConnectionManager()\n\n@router.websocket('/api/ws/wall')\nasync def wall_websocket(websocket: WebSocket):\n    await manager.connect(websocket)\n    unsubscribe = event_bus.subscribe(manager.broadcast)\n    try:\n        while True:\n            await websocket.receive_text()\n    except WebSocketDisconnect:\n        manager.disconnect(websocket)\n        unsubscribe()\n"
+                }
+              ],
+              "files_to_modify": [
+                {
+                  "path": "backend/app/routers/tasks.py",
+                  "changes": ["After creating a TaskCompletion row, call: await event_bus.emit('task_updated', {'task_id': task.id, 'status': task.status})"]
+                },
+                {
+                  "path": "backend/app/main.py",
+                  "changes": ["Include ws router: app.include_router(ws_router)"]
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_6",
+              "title": "PWA: service worker, install flow, offline mode",
+              "type": ["FE"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_4"],
+              "objective": "Complete Workbox service worker config. beforeinstallprompt handler for Chrome/Android. iOS Safari install guide modal. Offline banner component.",
+              "prerequisite": "Caddy self-signed cert must be trusted on test devices. See DevGuide Reminder 3.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/components/OfflineBanner.tsx",
+                  "description": "Yellow banner shown when navigator.onLine is false.",
+                  "code_pattern": "import { useState, useEffect } from 'react'\n\nexport function OfflineBanner() {\n  const [offline, setOffline] = useState(!navigator.onLine)\n  useEffect(() => {\n    const on = () => setOffline(false)\n    const off = () => setOffline(true)\n    window.addEventListener('online', on)\n    window.addEventListener('offline', off)\n    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) }\n  }, [])\n  if (!offline) return null\n  return (\n    <div className='fixed top-0 left-0 right-0 z-50 bg-yellow-400 text-yellow-900 text-center py-2 text-sm font-medium'>\n      You're offline — showing saved data\n    </div>\n  )\n}\n"
+                },
+                {
+                  "path": "frontend/src/components/InstallPrompt.tsx",
+                  "description": "Chrome/Android beforeinstallprompt banner + iOS Safari install instruction modal.",
+                  "code_pattern": "import { useState, useEffect } from 'react'\n\ninterface BeforeInstallPromptEvent extends Event {\n  prompt: () => Promise<void>\n  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>\n}\n\nconst isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)\nconst isStandalone = window.matchMedia('(display-mode: standalone)').matches\n\nexport function InstallPrompt() {\n  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)\n  const [showIOSGuide, setShowIOSGuide] = useState(false)\n\n  useEffect(() => {\n    if (isIOS && !isStandalone && !localStorage.getItem('ios-install-shown')) {\n      setTimeout(() => setShowIOSGuide(true), 5000)\n    }\n    const handler = (e: Event) => {\n      e.preventDefault()\n      setDeferredPrompt(e as BeforeInstallPromptEvent)\n    }\n    window.addEventListener('beforeinstallprompt', handler)\n    return () => window.removeEventListener('beforeinstallprompt', handler)\n  }, [])\n\n  const handleInstall = async () => {\n    if (!deferredPrompt) return\n    await deferredPrompt.prompt()\n    setDeferredPrompt(null)\n  }\n\n  if (showIOSGuide) return (\n    <div className='fixed bottom-4 left-4 right-4 bg-white rounded-xl shadow-lg p-4 z-50'>\n      <p className='font-medium text-gray-900 mb-1'>Install FamilyHub</p>\n      <p className='text-sm text-gray-600'>Tap the Share button, then \"Add to Home Screen\"</p>\n      <button className='mt-3 text-sm text-indigo-600' onClick={() => { setShowIOSGuide(false); localStorage.setItem('ios-install-shown','1') }}>Got it</button>\n    </div>\n  )\n\n  if (deferredPrompt) return (\n    <div className='fixed bottom-4 left-4 right-4 bg-indigo-600 text-white rounded-xl p-4 z-50 flex items-center justify-between'>\n      <span className='text-sm font-medium'>Install FamilyHub for quick access</span>\n      <button onClick={handleInstall} className='bg-white text-indigo-600 px-3 py-1 rounded-lg text-sm font-medium ml-4'>Install</button>\n    </div>\n  )\n\n  return null\n}\n"
+                }
+              ],
+              "files_to_modify": [
+                {
+                  "path": "frontend/vite.config.ts",
+                  "changes": ["Update workbox config with all runtime caching rules as specified in task objective"]
+                },
+                {
+                  "path": "frontend/src/App.tsx",
+                  "changes": ["Add <OfflineBanner /> and <InstallPrompt /> as global overlays at the root level"]
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_7",
+              "title": "Dashboard (Phase 1 version)",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_5", "task_1_3_6"],
+              "objective": "Role-aware dashboard: standard mode (events + tasks widgets) and child mode (big icon tasks + star balance). Independent widget loading via Suspense.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/pages/Dashboard.tsx",
+                  "description": "Checks ui_mode from auth store, renders StandardDashboard or ChildDashboard.",
+                  "key_points": [
+                    "Standard: greeting ('Good morning/afternoon/evening, [name]'), TodaysEventsWidget, TodaysTasksWidget",
+                    "Child: large avatar greeting, ChildTaskCards (emoji icon + title + giant checkmark), star balance '⭐ N stars'",
+                    "Each widget in its own Suspense boundary with skeleton fallback",
+                    "TodaysTasksWidget: GET /api/tasks?due_before=endOfToday&due_after=startOfToday&status=pending,overdue",
+                    "TodaysEventsWidget: GET /api/calendar/events?start=today&end=today"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_8",
+              "title": "Kiosk boot script and wall screen setup docs",
+              "type": ["INFRA"],
+              "is_blocker": false,
+              "depends_on": ["task_1_4_4"],
+              "objective": "Shell script and markdown doc to configure Raspberry Pi OS for auto-launching Chromium in kiosk mode at /wall on boot.",
+              "files_to_create": [
+                {
+                  "path": "scripts/setup-wall-screen.sh",
+                  "description": "Bash script that installs chromium-browser, unclutter, disables screen blanking in LXDE autostart, creates kiosk.desktop autostart entry.",
+                  "key_points": [
+                    "Check running on Raspberry Pi OS (check /etc/os-release)",
+                    "sudo apt install -y chromium-browser unclutter",
+                    "Append xset lines to /etc/xdg/lxsession/LXDE-pi/autostart",
+                    "Write kiosk.desktop to /etc/xdg/autostart/",
+                    "Print instructions for trusting the Caddy cert",
+                    "chromium-browser flags: --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --touch-events=enabled --disable-pinch --overscroll-history-navigation=0 http://familyhub.local/wall"
+                  ]
+                },
+                {
+                  "path": "docs/wall-screen-setup.md",
+                  "description": "Step-by-step human-readable guide for Pi OS setup, kiosk boot, cert trust on Pi, and display rotation."
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_9",
+              "title": "Automated daily backup job",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_1_3"],
+              "objective": "APScheduler cron job running daily at BACKUP_TIME. SQLite backup via sqlite3.backup() API. Prunes old files beyond BACKUP_RETENTION_DAYS.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/jobs/backup.py",
+                  "description": "daily_backup() cron job using sqlite3.backup() for safe copy during live operation.",
+                  "code_pattern": "import sqlite3\nimport logging\nfrom pathlib import Path\nfrom datetime import datetime\nfrom app.core.config import settings\n\nlogger = logging.getLogger(__name__)\n\nasync def daily_backup():\n    db_path = Path('/data/db/familyhub.db')\n    backup_dir = Path('/data/backups')\n    backup_dir.mkdir(parents=True, exist_ok=True)\n    date_str = datetime.now().strftime('%Y-%m-%d')\n    dest = backup_dir / f'familyhub_{date_str}.db'\n    try:\n        src = sqlite3.connect(str(db_path))\n        dst = sqlite3.connect(str(dest))\n        src.backup(dst)\n        src.close()\n        dst.close()\n        logger.info('Backup created: %s', dest)\n        all_backups = sorted(backup_dir.glob('familyhub_*.db'))\n        for old in all_backups[:-settings.backup_retention_days]:\n            old.unlink()\n            logger.info('Pruned old backup: %s', old)\n    except Exception as e:\n        logger.error('Backup failed: %s', e)\n"
+                }
+              ],
+              "files_to_modify": [
+                {
+                  "path": "backend/app/main.py",
+                  "changes": [
+                    "In lifespan, register backup job: backup_hour, backup_minute = settings.backup_time.split(':'); scheduler.add_job(daily_backup, 'cron', hour=int(backup_hour), minute=int(backup_minute), id='daily_backup')"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_1_4_10",
+              "title": "Phase 1 integration test suite",
+              "type": ["TEST"],
+              "is_blocker": false,
+              "depends_on": ["task_1_2_1","task_1_3_2","task_1_3_4","task_1_4_2"],
+              "objective": "pytest integration tests for auth, calendar, tasks, photos. Manual Pi hardware checklist.",
+              "files_to_create": [
+                {
+                  "path": "backend/tests/test_auth.py",
+                  "description": "Test setup flow, login with password, login with PIN, PIN rate limiting, GET /api/auth/me with/without cookie, logout.",
+                  "key_points": [
+                    "Test that 6th PIN attempt within 60s returns 429",
+                    "Test that GET /me without cookie returns 401",
+                    "Test that POST /setup fails if family already exists"
+                  ]
+                },
+                {
+                  "path": "backend/tests/test_tasks.py",
+                  "description": "Test task CRUD, complete task (no photo), complete task with photo, verify task, overdue job marking.",
+                  "key_points": [
+                    "Test that non-admin cannot create tasks",
+                    "Test that completing a recurring task generates next instance with correct due date",
+                    "Test overdue job changes status correctly"
+                  ]
+                },
+                {
+                  "path": "backend/tests/test_calendar.py",
+                  "description": "Test event CRUD, date range query, RRULE expansion returning correct occurrences.",
+                  "key_points": [
+                    "Test weekly recurring event: query 4-week range returns 4 occurrences",
+                    "Test all-day event handling"
+                  ]
+                },
+                {
+                  "path": "backend/tests/test_photos.py",
+                  "description": "Test photo upload, thumbnail creation, album creation, adding photos to album, slideshow endpoint order."
+                },
+                {
+                  "path": "docs/phase1-hardware-test-checklist.md",
+                  "description": "Manual checklist for testing Phase 1 exit criteria on actual Raspberry Pi 4 hardware. Each item is a checkbox with exact test procedure."
+                }
+              ],
+              "shell_commands": [
+                {
+                  "description": "Run full test suite",
+                  "command": "source .venv/bin/activate && pytest tests/ -v --tb=short",
+                  "cwd": "backend"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase_2",
+      "title": "Full Calendars + Lists + Family Board",
+      "weeks": "8-18",
+      "goal": "All three calendar providers syncing with configurable direction. Custom lists as primary household tool. Family Board fully configurable.",
+      "exit_criteria": [
+        "Google, Microsoft, Apple calendars sync with configurable direction",
+        "Sync conflict detected and resolvable by admin",
+        "Packing list template instantiated and completed from wall and phone",
+        "Shopping mode groups items by aisle",
+        "Drag-to-reorder on touchscreen",
+        "Kanban board drag-and-drop updates task status",
+        "Child sees point balance and can request reward redemption",
+        "Wall board rearrangeable by admin",
+        "Push notification delivered to phone for overdue task"
+      ],
+      "sprints": [
+        {
+          "id": "sprint_2_1",
+          "title": "Microsoft & Apple Calendar Integrations",
+          "weeks": "8-10",
+          "tasks": [
+            {
+              "id": "task_2_1_1",
+              "title": "Microsoft Graph API integration",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_3"],
+              "prerequisite": "MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET must be set in .env. Register app at portal.azure.com first.",
+              "objective": "MSAL OAuth2 flow for Microsoft Calendar. Delta sync using Graph API /me/calendarView/delta. Encrypted token storage.",
+              "files_to_create": [
+                {
+                  "path": "backend/app/integrations/microsoft_calendar.py",
+                  "description": "Microsoft Graph API integration using msal and httpx.",
+                  "key_points": [
+                    "get_auth_url(state): ConfidentialClientApplication.get_authorization_request_url() with scopes ['Calendars.ReadWrite','offline_access','User.Read']",
+                    "exchange_code(code): acquire_token_by_authorization_code()",
+                    "refresh_token(credentials): acquire_token_by_refresh_token()",
+                    "sync_events(source): GET https://graph.microsoft.com/v1.0/me/calendarView/delta with delta link for incremental sync",
+                    "Handle 410 Gone by falling back to full sync",
+                    "Push event for bidirectional: POST /me/calendars/{id}/events"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_2_1_2",
+              "title": "Apple CalDAV integration",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_3"],
+              "objective": "CalDAV connection to iCloud using app-specific password. Incremental sync via REPORT with time range. Write support via PUT ics objects.",
+              "packages_to_install": ["caldav", "icalendar"],
+              "files_to_create": [
+                {
+                  "path": "backend/app/integrations/apple_calendar.py",
+                  "description": "Apple CalDAV integration using caldav library.",
+                  "key_points": [
+                    "connect(email, app_specific_password): caldav.DAVClient('https://caldav.icloud.com', username=email, password=app_specific_password)",
+                    "discover_calendars(client): client.principal().calendars()",
+                    "sync_events(source): REPORT with VCALENDAR time range filter, parse icalendar objects",
+                    "Implement exponential backoff: on HTTP 429/503 wait 2^n seconds up to 5 retries",
+                    "For write: create vCalendar ics string, caldav.Calendar.save_event(ics)"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "task_2_1_3",
+              "title": "Calendar settings page",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_2_1_1", "task_2_1_2"],
+              "objective": "Admin calendar settings page. Connect/disconnect for all three providers. Sync direction selector per source. Sync log viewer. Sync-now button.",
+              "files_to_create": [
+                {
+                  "path": "frontend/src/pages/admin/CalendarSettings.tsx",
+                  "description": "Calendar integration management UI."
+                }
+              ]
+            },
+            {
+              "id": "task_2_1_4",
+              "title": "Calendar sync conflict detection and resolution",
+              "type": ["BE", "FE"],
+              "is_blocker": false,
+              "depends_on": ["task_2_1_1", "task_2_1_2"],
+              "objective": "Detect bidirectional sync conflicts (both sides modified since last sync). Store in sync_conflicts table. Admin resolution UI.",
+              "files_to_create": [
+                {
+                  "path": "backend/alembic/versions/004_sync_conflicts.py",
+                  "description": "Migration for sync_conflicts table: id, source_id FK, event_id, external_version JSON, local_version JSON, detected_at, resolved_by FK nullable, resolution (keep_local/keep_external/keep_both), resolved_at"
+                },
+                {
+                  "path": "frontend/src/components/ConflictBadge.tsx",
+                  "description": "Notification badge in calendar settings showing count of unresolved conflicts."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sprint_2_2",
+          "title": "Custom Lists Module",
+          "weeks": "10-12",
+          "tasks": [
+            {
+              "id": "task_2_2_1",
+              "title": "Lists schema migration",
+              "type": ["DB"],
+              "is_blocker": true,
+              "depends_on": ["task_1_1_5"],
+              "objective": "Migration 005 for list_templates, list_template_items, list_instances, list_instance_items tables.",
+              "files_to_create": [
+                { "path": "backend/app/models/lists.py", "description": "ListTemplate, ListTemplateItem, ListInstance, ListInstanceItem models." },
+                { "path": "backend/alembic/versions/005_lists.py", "description": "Autogenerated migration." }
+              ]
+            },
+            {
+              "id": "task_2_2_2",
+              "title": "Lists API",
+              "type": ["BE"],
+              "is_blocker": false,
+              "depends_on": ["task_2_2_1"],
+              "objective": "Full CRUD for templates and instances. Instantiate creates deep copy. Item reorder endpoint. Completion tracking.",
+              "files_to_create": [
+                { "path": "backend/app/routers/lists.py", "description": "All list and template endpoints as specified." },
+                { "path": "backend/app/services/lists.py", "description": "instantiate_template() deep copy logic, reorder_items()." }
+              ]
+            },
+            {
+              "id": "task_2_2_3",
+              "title": "Lists UI",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_2_2_2"],
+              "objective": "Lists page with active/templates/archive tabs. ListInstance page with shopping mode, drag-to-reorder, inline add. Template editor.",
+              "files_to_create": [
+                { "path": "frontend/src/pages/Lists.tsx", "description": "Lists overview page." },
+                { "path": "frontend/src/pages/ListInstance.tsx", "description": "Active list with shopping mode toggle, DnD reorder, large checkboxes." },
+                { "path": "frontend/src/pages/admin/ListTemplateEditor.tsx", "description": "Template editor with lock toggle and built-in template seeding." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sprint_2_3",
+          "title": "Chore Board, Rewards & Enhanced Wall",
+          "weeks": "12-14",
+          "tasks": [
+            {
+              "id": "task_2_3_1",
+              "title": "Kanban chore board",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_6"],
+              "objective": "4-column Kanban using @dnd-kit. Drag cards to update status. Filter bar. Completion photo thumbnails. Verify/reject from board.",
+              "files_to_create": [{ "path": "frontend/src/pages/ChoreBoard.tsx", "description": "Kanban board with DnD columns." }]
+            },
+            {
+              "id": "task_2_3_2",
+              "title": "Point / reward system",
+              "type": ["BE", "FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_4"],
+              "objective": "reward_definitions and reward_redemptions tables. Points balance API. Admin creates rewards. Users redeem. Rewards page UI.",
+              "files_to_create": [
+                { "path": "backend/alembic/versions/006_rewards.py", "description": "Migration for reward tables." },
+                { "path": "backend/app/routers/rewards.py", "description": "Reward and redemption endpoints." },
+                { "path": "frontend/src/pages/Rewards.tsx", "description": "Per-member balance, rewards list, redemption requests." }
+              ]
+            },
+            {
+              "id": "task_2_3_3",
+              "title": "Family Board panel editor and enhanced wall",
+              "type": ["FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_4_4"],
+              "objective": "Admin drag-and-drop wall layout editor. Wall reads config from API instead of hardcoded. Per-person focus mode. Dark mode toggle.",
+              "files_to_create": [
+                { "path": "frontend/src/pages/admin/WallLayoutEditor.tsx", "description": "Panel placement grid editor. Saves layout JSON to families.settings_json." }
+              ],
+              "files_to_modify": [
+                { "path": "frontend/src/wall/WallLayout.tsx", "changes": ["Read panel layout from API, render panels dynamically. Add per-person focus mode on avatar tap."] }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sprint_2_4",
+          "title": "Weather, Announcements & Push Notifications",
+          "weeks": "14-16",
+          "tasks": [
+            {
+              "id": "task_2_4_1",
+              "title": "Weather widget",
+              "type": ["BE", "FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_1_3"],
+              "objective": "Open-Meteo weather API (no key). Cache 30 min. GET /api/weather endpoint. WeatherWidget component with WMO code icons.",
+              "files_to_create": [
+                { "path": "backend/app/integrations/weather.py", "description": "Open-Meteo fetch with 30-min in-memory cache." },
+                { "path": "backend/app/routers/weather.py", "description": "GET /api/weather" },
+                { "path": "frontend/src/components/widgets/WeatherWidget.tsx", "description": "Current + 5-day forecast. WMO code to emoji/icon mapping." }
+              ]
+            },
+            {
+              "id": "task_2_4_2",
+              "title": "Family announcements board",
+              "type": ["BE", "FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_2_1"],
+              "objective": "Announcements table. CRUD with pin/expire/react. AnnouncementsWidget (read-only on wall, post-capable on dashboard).",
+              "files_to_create": [
+                { "path": "backend/alembic/versions/007_announcements.py", "description": "Migration for announcements table." },
+                { "path": "backend/app/routers/announcements.py", "description": "Announcement CRUD with pin, expire, react endpoints." },
+                { "path": "frontend/src/components/widgets/AnnouncementsWidget.tsx", "description": "Card feed with post field, pinning, emoji reactions." }
+              ]
+            },
+            {
+              "id": "task_2_4_3",
+              "title": "Push notifications infrastructure",
+              "type": ["BE", "FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_2_1"],
+              "objective": "VAPID Web Push. push_subscriptions table. Subscribe/unsubscribe endpoints. send_push() service. Triggers on task overdue, verification needed, reward redemption.",
+              "files_to_create": [
+                { "path": "backend/alembic/versions/008_push_subscriptions.py", "description": "Migration for push_subscriptions." },
+                { "path": "backend/app/services/push.py", "description": "send_push() using pywebpush. Handle 410 Gone → delete subscription." },
+                { "path": "backend/app/routers/push.py", "description": "Subscribe/unsubscribe endpoints." },
+                { "path": "frontend/src/hooks/usePushNotifications.ts", "description": "requestPermission(), subscription management, graceful permission-denied handling." },
+                { "path": "frontend/src/pages/NotificationSettings.tsx", "description": "Per-category opt-in toggles for push notifications." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sprint_2_5",
+          "title": "iCal Feeds & Phase 2 Testing",
+          "weeks": "16-18",
+          "tasks": [
+            {
+              "id": "task_2_5_1",
+              "title": "iCal feed subscriptions",
+              "type": ["BE", "FE"],
+              "is_blocker": false,
+              "depends_on": ["task_1_3_3"],
+              "objective": "Read-only iCal URL import. httpx fetch + icalendar parse. Refresh every 6 hours. Admin UI to add/remove feeds.",
+              "files_to_create": [
+                { "path": "backend/app/integrations/ical_feed.py", "description": "fetch_and_parse(url) returning event list. UTC conversion. Recurring event support." }
+              ]
+            },
+            {
+              "id": "task_2_5_2",
+              "title": "Phase 2 exit criteria validation",
+              "type": ["TEST"],
+              "is_blocker": false,
+              "depends_on": ["task_2_1_1","task_2_1_2","task_2_2_3","task_2_3_1","task_2_3_2","task_2_3_3","task_2_4_1","task_2_4_2","task_2_4_3","task_2_5_1"],
+              "objective": "Manual validation of all Phase 2 exit criteria on Pi hardware.",
+              "files_to_create": [
+                { "path": "docs/phase2-hardware-test-checklist.md", "description": "Checkbox checklist for Phase 2 exit criteria." }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase_3",
+      "title": "Routines + Meal Planning + Enrichment",
+      "weeks": "18-30",
+      "goal": "Structured routines with guided runner, meal planning with shopping list generation, morning briefing wall mode, family wiki, homework tracker.",
+      "sprints": [
+        { "id": "sprint_3_1", "title": "Routines Module", "weeks": "18-20",
+          "tasks": [
+            { "id": "task_3_1_1", "title": "Routines schema (migration 009)", "type": ["DB"], "depends_on": ["task_1_1_5"],
+              "objective": "routines, routine_steps, routine_logs tables.",
+              "files_to_create": [
+                {"path": "backend/app/models/routines.py", "description": "Routine, RoutineStep, RoutineLog models."},
+                {"path": "backend/alembic/versions/009_routines.py", "description": "Autogenerated migration."}
+              ]
+            },
+            { "id": "task_3_1_2", "title": "Routines API", "type": ["BE"], "depends_on": ["task_3_1_1"],
+              "objective": "CRUD for routines and steps. Start/complete/step-complete log endpoints. Stats (streak, completion rate). Clone endpoint.",
+              "files_to_create": [
+                {"path": "backend/app/routers/routines.py", "description": "Routine CRUD + log management."},
+                {"path": "backend/app/services/routines.py", "description": "calculate_streak(), get_completion_rate()."}
+              ]
+            },
+            { "id": "task_3_1_3", "title": "Routine builder (admin)", "type": ["FE"], "depends_on": ["task_3_1_2"],
+              "objective": "Admin form to build routines: name, assignees, schedule days/time, drag-reorderable steps.",
+              "files_to_create": [{"path": "frontend/src/pages/admin/RoutineBuilder.tsx", "description": "Routine builder form with step editor."}]
+            },
+            { "id": "task_3_1_4", "title": "Routine Runner (full-screen mode)", "type": ["FE"], "depends_on": ["task_3_1_2"],
+              "objective": "Full-screen guided step-by-step mode. One step at a time, countdown timer, progress bar, confetti on completion.",
+              "files_to_create": [{"path": "frontend/src/pages/RoutineRunner.tsx", "description": "Full-screen routine runner with step timer and completion animation."}]
+            },
+            { "id": "task_3_1_5", "title": "Routine dashboard widget and wall panel", "type": ["FE"], "depends_on": ["task_3_1_2"],
+              "files_to_create": [{"path": "frontend/src/components/widgets/RoutineProgressWidget.tsx", "description": "Per-member routine progress dots."}]
+            }
+          ]
+        },
+        { "id": "sprint_3_2", "title": "Meal Planning", "weeks": "20-23",
+          "tasks": [
+            { "id": "task_3_2_1", "title": "Meal planning schema (migrations 010)", "type": ["DB"], "depends_on": ["task_1_1_5"],
+              "objective": "recipes, recipe_ingredients, meal_plan_weeks, meal_plan_slots, pantry_items tables.",
+              "files_to_create": [
+                {"path": "backend/app/models/meals.py", "description": "Recipe, RecipeIngredient, MealPlanWeek, MealPlanSlot, PantryItem models."},
+                {"path": "backend/alembic/versions/010_meals.py", "description": "Autogenerated migration."}
+              ]
+            },
+            { "id": "task_3_2_2", "title": "Meal planner API", "type": ["BE"], "depends_on": ["task_3_2_1"],
+              "objective": "Recipe CRUD. Meal plan week CRUD. generate-shopping-list endpoint. Pantry CRUD. Recipe URL scraper.",
+              "packages_to_install": ["recipe-scrapers"],
+              "files_to_create": [
+                {"path": "backend/app/routers/meals.py", "description": "Recipe and meal plan endpoints."},
+                {"path": "backend/app/services/meals.py", "description": "generate_shopping_list() consolidating ingredients, scrape_recipe_url()."}
+              ]
+            },
+            { "id": "task_3_2_3", "title": "Weekly meal planner UI", "type": ["FE"], "depends_on": ["task_3_2_2"],
+              "files_to_create": [{"path": "frontend/src/pages/MealPlanner.tsx", "description": "7x4 week grid, recipe picker drawer, generate shopping list button."}]
+            },
+            { "id": "task_3_2_4", "title": "Recipe library and URL import UI", "type": ["FE"], "depends_on": ["task_3_2_2"],
+              "files_to_create": [{"path": "frontend/src/pages/Recipes.tsx", "description": "Recipe grid, detail page with scalable servings, add form, URL import."}]
+            }
+          ]
+        },
+        { "id": "sprint_3_3", "title": "Morning Briefing, Homework Tracker & Family Wiki", "weeks": "23-25",
+          "tasks": [
+            { "id": "task_3_3_1", "title": "Morning Briefing auto-cycle wall mode", "type": ["FE"], "depends_on": ["task_1_4_4"],
+              "files_to_create": [{"path": "frontend/src/wall/MorningBriefing.tsx", "description": "Full-screen auto-cycling panel mode. 10s per panel, touch to pause, progress dots."}]
+            },
+            { "id": "task_3_3_2", "title": "Homework tracker", "type": ["BE", "FE"], "depends_on": ["task_1_2_1"],
+              "files_to_create": [
+                {"path": "backend/alembic/versions/011_homework.py", "description": "homework_assignments table."},
+                {"path": "backend/app/routers/homework.py", "description": "CRUD scoped to current user."},
+                {"path": "frontend/src/pages/Homework.tsx", "description": "Subject-grouped assignments, calendar integration."}
+              ]
+            },
+            { "id": "task_3_3_3", "title": "Family Wiki", "type": ["BE", "FE"], "depends_on": ["task_1_2_1"],
+              "files_to_create": [
+                {"path": "backend/alembic/versions/012_wiki.py", "description": "wiki_pages table."},
+                {"path": "backend/app/routers/wiki.py", "description": "CRUD with role-based visibility. Full-text search."},
+                {"path": "frontend/src/pages/Wiki.tsx", "description": "Category sidebar, markdown rendered content, search."}
+              ]
+            }
+          ]
+        },
+        { "id": "sprint_3_4", "title": "Allowance, Pet Care & Collaborative Notes", "weeks": "25-27",
+          "tasks": [
+            { "id": "task_3_4_1", "title": "Allowance tracker extension", "type": ["BE", "FE"], "depends_on": ["task_2_3_2"],
+              "files_to_create": [
+                {"path": "backend/alembic/versions/013_allowance.py", "description": "allowance_ledger table."},
+                {"path": "frontend/src/pages/Allowance.tsx", "description": "Per-child ledger, mark-as-paid."}
+              ]
+            },
+            { "id": "task_3_4_2", "title": "Pet care tracker", "type": ["BE", "FE"], "depends_on": ["task_1_3_4"],
+              "files_to_create": [
+                {"path": "backend/alembic/versions/014_pets.py", "description": "pets table."},
+                {"path": "frontend/src/pages/Pets.tsx", "description": "Pet profiles, care task integration."}
+              ]
+            },
+            { "id": "task_3_4_3", "title": "Collaborative notes scratchpad", "type": ["BE", "FE"], "depends_on": ["task_1_2_1"],
+              "files_to_create": [
+                {"path": "backend/alembic/versions/015_notes.py", "description": "notes table."},
+                {"path": "frontend/src/pages/Notes.tsx", "description": "Markdown scratchpad with convert-to-list button."}
+              ]
+            }
+          ]
+        },
+        { "id": "sprint_3_5", "title": "Guest Access & Caregiver Link", "weeks": "27-28",
+          "tasks": [
+            { "id": "task_3_5_1", "title": "Temporary caregiver access link", "type": ["BE", "FE"], "depends_on": ["task_1_2_1"],
+              "objective": "Time-limited access token for caregivers. Shows today's schedule + emergency contacts + specific lists.",
+              "files_to_create": [
+                {"path": "backend/alembic/versions/016_access_links.py", "description": "access_links table."},
+                {"path": "backend/app/routers/access_links.py", "description": "Create, validate, revoke access links."},
+                {"path": "frontend/src/pages/admin/AccessLinks.tsx", "description": "Admin UI to manage caregiver links."}
+              ]
+            }
+          ]
+        },
+        { "id": "sprint_3_6", "title": "Phase 3 Integration & Performance Testing", "weeks": "28-30",
+          "tasks": [
+            { "id": "task_3_6_1", "title": "Performance profiling on Pi hardware", "type": ["TEST"], "depends_on": [],
+              "objective": "Profile dashboard load, API p95 response times, memory per container after 24h. Fix any >1s responses.",
+              "acceptance_check": [
+                "docker stats --no-stream | grep familyhub | awk '{print $4}' # Total memory < 300MB",
+                "ab -n 100 -c 5 -C access_token=TEST https://familyhub.local/api/tasks # p95 < 500ms"
+              ],
+              "files_to_create": [{"path": "docs/phase3-hardware-test-checklist.md", "description": "Phase 3 exit criteria checklist."}]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase_4",
+      "title": "Intelligence + Admin Polish + Accessibility",
+      "weeks": "30-44",
+      "goal": "Reduce admin toil with smart features. All config from UI. Accessibility audit. PostgreSQL path.",
+      "sprints": [
+        {"id": "sprint_4_1", "title": "Goals & Habit Tracker + Vehicle Maintenance", "weeks": "30-32",
+          "tasks": [
+            {"id": "task_4_1_1", "title": "Goals and habit tracker", "type": ["BE","FE"], "depends_on": ["task_1_2_1"],
+              "objective": "goals and habit_logs tables. Goal creation (household/individual). Progress bars, streak counters. Dashboard widget.",
+              "files_to_create": [
+                {"path": "backend/alembic/versions/017_goals.py", "description": "goals, habit_logs tables."},
+                {"path": "frontend/src/pages/Goals.tsx", "description": "Goal cards with progress bars and streaks."}
+              ]
+            },
+            {"id": "task_4_1_2", "title": "Vehicle maintenance tracker", "type": ["BE","FE"], "depends_on": ["task_1_2_1"],
+              "files_to_create": [
+                {"path": "backend/alembic/versions/018_vehicles.py", "description": "vehicles, vehicle_service_records tables."},
+                {"path": "frontend/src/pages/Vehicles.tsx", "description": "Vehicle profiles, service history, upcoming maintenance alerts."}
+              ]
+            }
+          ]
+        },
+        {"id": "sprint_4_2", "title": "Full Admin Settings UI", "weeks": "32-34",
+          "tasks": [
+            {"id": "task_4_2_1", "title": "Admin settings dashboard", "type": ["FE"], "depends_on": [],
+              "objective": "Single settings page with sections for all configuration. No .env editing required post-install.",
+              "files_to_create": [{"path": "frontend/src/pages/admin/Settings.tsx", "description": "Tabbed settings: General, Calendars, Notifications, Storage, Backup, Wall Display, Security."}]
+            }
+          ]
+        },
+        {"id": "sprint_4_3", "title": "Advanced Reporting", "weeks": "34-36",
+          "tasks": [
+            {"id": "task_4_3_1", "title": "Chore completion reporting", "type": ["BE","FE"], "depends_on": ["task_1_3_4"],
+              "objective": "GET /api/reports/chores endpoint. Returns per-person completion rates over 30/60/90 days. Charts on admin dashboard.",
+              "files_to_create": [
+                {"path": "backend/app/routers/reports.py", "description": "Reporting endpoints with date range aggregations."},
+                {"path": "frontend/src/pages/admin/Reports.tsx", "description": "Bar/line charts of completion rates using recharts or Chart.js."}
+              ]
+            }
+          ]
+        },
+        {"id": "sprint_4_4", "title": "PostgreSQL Migration Path + Offline Write Queue", "weeks": "36-38",
+          "tasks": [
+            {"id": "task_4_4_1", "title": "PostgreSQL migration documentation and compose variant", "type": ["INFRA"], "depends_on": [],
+              "files_to_create": [
+                {"path": "docker-compose.postgres.yml", "description": "Alternative compose with postgres:16-alpine service."},
+                {"path": "docs/postgres-migration.md", "description": "Step-by-step SQLite to PostgreSQL migration using pgloader."}
+              ]
+            },
+            {"id": "task_4_4_2", "title": "Offline write queue for task completions", "type": ["FE"], "depends_on": ["task_1_4_6"],
+              "objective": "IndexedDB queue for task completions made while offline. Sync when connection restores. Show pending count badge.",
+              "files_to_create": [{"path": "frontend/src/hooks/useOfflineQueue.ts", "description": "IndexedDB-backed queue with sync-on-reconnect logic."}]
+            }
+          ]
+        },
+        {"id": "sprint_4_5", "title": "Bulk Operations", "weeks": "38-40",
+          "tasks": [
+            {"id": "task_4_5_1", "title": "Bulk task and list operations", "type": ["BE","FE"], "depends_on": ["task_1_3_4"],
+              "objective": "POST /api/tasks/bulk-assign, /bulk-reschedule, /bulk-archive. Multi-select UI with floating action bar.",
+              "files_to_create": [{"path": "frontend/src/components/BulkActionBar.tsx", "description": "Floating bar appearing when items selected. Actions: assign, reschedule, archive."}]
+            }
+          ]
+        },
+        {"id": "sprint_4_6", "title": "i18n + Accessibility Audit", "weeks": "40-42",
+          "tasks": [
+            {"id": "task_4_6_1", "title": "i18n string extraction", "type": ["FE"], "depends_on": [],
+              "packages_to_install_fe": ["i18next", "react-i18next"],
+              "objective": "Extract all user-facing strings to en.json. i18next setup. Language selector in settings (English only for now, framework for community translation).",
+              "files_to_create": [{"path": "frontend/src/locales/en.json", "description": "All UI strings as key-value pairs."}]
+            },
+            {"id": "task_4_6_2", "title": "WCAG 2.1 AA accessibility remediation", "type": ["FE"], "depends_on": [],
+              "objective": "Run axe DevTools audit. Fix: color contrast, missing aria-labels, keyboard navigation gaps, focus management in modals.",
+              "acceptance_check": ["npx axe-cli https://familyhub.local/dashboard --tags wcag2aa | grep '0 violations'"]
+            }
+          ]
+        },
+        {"id": "sprint_4_7", "title": "Performance Optimization + API Docs", "weeks": "42-44",
+          "tasks": [
+            {"id": "task_4_7_1", "title": "FastAPI API documentation polish", "type": ["BE"], "depends_on": [],
+              "objective": "Add response_model, summary, description, tags to all endpoints. Verify /api/docs is complete and accurate."
+            },
+            {"id": "task_4_7_2", "title": "Phase 4 performance optimization", "type": ["BE","FE"], "depends_on": [],
+              "objective": "Profile any >500ms endpoints on Pi 4. Add DB indexes on commonly queried columns. Lazy-load heavy page components.",
+              "key_db_indexes": [
+                "tasks: (family_id, status, due_date)",
+                "tasks: (assignee_id, status)",
+                "calendar_events: (source_id, start_dt, end_dt)",
+                "calendar_events: (family_id via source, is_deleted)"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase_5",
+      "title": "Ecosystem & Extensibility",
+      "weeks": "44-56",
+      "goal": "Connect to home ecosystem. Voice assistants. Multi-household. Native mobile wrappers. Community templates.",
+      "sprints": [
+        {"id": "sprint_5_1", "title": "Home Assistant Integration", "weeks": "44-46",
+          "tasks": [{"id":"task_5_1_1","title":"Home Assistant integration","type":["BE","FE"],"depends_on":[],
+            "objective":"Display HA sensor values on wall panels. Trigger HA automations from routine step completion via REST webhook.",
+            "files_to_create":[{"path":"backend/app/integrations/home_assistant.py","description":"HA REST API client. Fetch states. Post webhook triggers."}]
+          }]
+        },
+        {"id": "sprint_5_2", "title": "Voice Assistant Webhooks", "weeks": "46-48",
+          "tasks": [{"id":"task_5_2_1","title":"Alexa/Google Home read-only webhook","type":["BE"],"depends_on":["task_1_3_4"],
+            "objective":"GET /api/voice/today-summary endpoint returning plain-text summary suitable for voice reading. Alexa skill or Google Action webhook handler.",
+            "files_to_create":[{"path":"backend/app/routers/voice.py","description":"Voice-optimized API endpoints returning plain text for TTS."}]
+          }]
+        },
+        {"id": "sprint_5_3", "title": "Multi-household Support", "weeks": "48-50",
+          "tasks": [{"id":"task_5_3_1","title":"Multi-household data isolation","type":["BE","FE"],"depends_on":[],
+            "objective":"Support multiple independent families on one instance. Household switching. Shared calendar view option for co-parenting.",
+            "key_points":["All queries already scoped by family_id — verify this is consistent throughout","Add household switcher to user profile menu","Shared calendar: one family can grant read access to specific calendars to another family_id"]
+          }]
+        },
+        {"id": "sprint_5_4", "title": "Capacitor Mobile App Wrappers", "weeks": "50-52",
+          "tasks": [{"id":"task_5_4_1","title":"iOS and Android native wrappers via Capacitor","type":["FE","INFRA"],"depends_on":["task_1_4_6"],
+            "packages_to_install_fe":["@capacitor/core","@capacitor/ios","@capacitor/android","@capacitor/push-notifications"],
+            "objective":"Capacitor wraps the existing React PWA into native iOS/Android apps. Native push notifications via FCM/APNs."
+          }]
+        },
+        {"id": "sprint_5_5", "title": "Community Template Library", "weeks": "52-53",
+          "tasks": [{"id":"task_5_5_1","title":"JSON template import/export","type":["BE","FE"],"depends_on":["task_2_2_2"],
+            "objective":"Export list templates and routines as portable JSON. Import from file or URL. Shareable via GitHub Gist or direct file.",
+            "files_to_create":[
+              {"path":"backend/app/routers/export.py","description":"Export templates/routines as JSON. Validate and import incoming JSON."},
+              {"path":"frontend/src/pages/admin/TemplateLibrary.tsx","description":"Browse built-in templates, import from file, export selected."}
+            ]
+          }]
+        },
+        {"id": "sprint_5_6", "title": "Backup Restore UI + Auto-Update + Setup Wizard v2", "weeks": "53-56",
+          "tasks": [
+            {"id":"task_5_6_1","title":"Backup restore UI","type":["BE","FE"],"depends_on":["task_1_4_9"],
+              "objective":"Admin can browse backup files and trigger a restore without CLI. Shows backup list, confirms, stops API, restores file, restarts.",
+              "files_to_create":[{"path":"backend/app/routers/admin.py","description":"GET /api/admin/backups (list), POST /api/admin/backups/{filename}/restore"}]
+            },
+            {"id":"task_5_6_2","title":"Automated update mechanism","type":["INFRA"],"depends_on":["task_1_1_2"],
+              "objective":"Admin settings shows current version vs latest GHCR tag. One-click update: pulls new image, recreates containers, runs migrations.",
+              "files_to_create":[{"path":"scripts/update.sh","description":"Script that docker compose pull && docker compose up -d --build, with pre-update backup."}]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+
+  "cross_cutting_tasks": {
+    "description": "These run throughout all phases — treat as ongoing obligations not one-time tasks.",
+    "items": [
+      {
+        "id": "cc_security_review",
+        "title": "Security review before each phase release",
+        "checklist": [
+          "Every new API endpoint has authentication (get_current_user or explicit allow-list)",
+          "Role checks on write operations (require_role used correctly)",
+          "No sensitive data (passwords, tokens, PINs) returned in API responses",
+          "All user input validated via Pydantic schemas with field constraints",
+          "File uploads: validate MIME type, reject non-image files, cap max size"
+        ]
+      },
+      {
+        "id": "cc_migration_test",
+        "title": "Test every Alembic migration upgrade AND downgrade before merging",
+        "command": "alembic upgrade head && alembic downgrade -1 && alembic upgrade head"
+      },
+      {
+        "id": "cc_pi_hardware_test",
+        "title": "Pi 4 hardware performance test at end of each phase",
+        "checklist": [
+          "docker stats shows total memory < 300MB idle",
+          "p95 API response < 500ms under 5 concurrent users (use Apache Bench: ab -n 200 -c 5)",
+          "Dashboard loads in < 3s cold on local network",
+          "Backup job completes in < 30 seconds"
+        ]
+      },
+      {
+        "id": "cc_env_example",
+        "title": "Keep .env.example in sync with all env vars used in code",
+        "rule": "Every new settings field added to config.py must be documented in .env.example with a comment"
+      },
+      {
+        "id": "cc_dependency_audit",
+        "title": "Monthly dependency security audit",
+        "commands": [
+          "cd backend && pip-audit",
+          "cd frontend && npm audit"
+        ]
+      }
+    ]
+  }
+}
