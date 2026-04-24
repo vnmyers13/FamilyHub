@@ -61,6 +61,10 @@ async def internal_error_handler(request: Request, exc: Exception):
 # Include routers
 app.include_router(health.router)
 
+# Import auth router
+from app.routers import auth as auth_router
+app.include_router(auth_router.router)
+
 
 # Root endpoint
 @app.get("/")
