@@ -1,0 +1,64 @@
+# PURPOSE: Production and development dependencies for FamilyHub FastAPI backend
+# ROLE: Backend
+# MODIFIED: 2026-04-23 — Phase 0 infrastructure setup (locked to Python 3.12.4)
+
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.23
+aiosqlite==0.19.0
+alembic==1.12.1
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# Google Calendar Integration
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.107.0
+
+# Job Scheduling
+apscheduler==3.10.4
+
+# Caching
+cachetools==5.3.2
+
+# Data Validation
+pydantic[email]==2.5.0
+pydantic-core==2.14.1
+
+# Push Notifications
+pywebpush==1.14.1
+
+# Email
+aiosmtplib==3.0.1
+email-validator==2.1.0
+
+# File Handling
+pillow==10.1.0
+python-magic==0.4.27
+
+# Logging & Monitoring
+python-json-logger==2.0.7
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.1
+faker==21.0.0
+
+# Development
+black==23.12.1
+ruff==0.1.8
+mypy==1.7.1
+types-setuptools==69.0.0.1
+
+# Production Server
+gunicorn==21.2.0
