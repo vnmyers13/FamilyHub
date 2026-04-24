@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # FastAPI backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: familyhub-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=${DEBUG:-False}
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=sqlite:////data/db/familyhub.db
+      - ALLOWED_HOSTS=familyhub.local,localhost,127.0.0.1,api
+    volumes:
+      - ./data/db:/data/db
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      - caddy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # React frontend (Vite dev server)
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: familyhub-web
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=https://familyhub.local/api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev
+    depends_on:
+      - caddy
+    restart: unless-stopped
+
+  # Caddy reverse proxy
+  caddy:
+    image: caddy:2.7.6-alpine
+    container_name: familyhub-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=familyhub.local
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://familyhub.local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+
+networks:
+  default:
+    name: familyhub

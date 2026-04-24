@@ -1,0 +1,24 @@
+# PURPOSE: Development Docker image for FamilyHub React frontend
+# ROLE: Frontend Infrastructure
+# MODIFIED: 2026-04-24 — Phase 1.1 Docker setup
+
+FROM node:20.11.0-alpine
+
+LABEL org.opencontainers.image.title="FamilyHub Frontend (Dev)"
+LABEL org.opencontainers.image.version="1"
+LABEL org.opencontainers.image.description="React + Vite frontend for FamilyHub (development)"
+
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Copy application code
+COPY . .
+
+# Expose port for Vite dev server
+EXPOSE 5173
+
+# Run development server
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
