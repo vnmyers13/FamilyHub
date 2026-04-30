@@ -1,12 +1,22 @@
 # FamilyHub — Product Requirements Document
-**Version:** 1.1
-**Status:** Draft — Decisions Incorporated
-**Date:** April 2026
+**Version:** 1.2
+**Status:** Draft — Testing + Solo Dev Strategy Incorporated
+**Date:** April 29, 2026
 **Target Platform:** Self-hosted Web Application + PWA (Docker, Raspberry Pi)
 
 ---
 
-## Changelog from v1.0
+## Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| **1.2** | 2026-04-29 | Added comprehensive testing strategy (TDD, coverage targets, E2E, security, Pi validation). Added solo developer roadmap (50-week timeline, scope priorities, deferred features). |
+| **1.1** | 2026-04-28 | Converted Open Questions to Decisions Log with 7 resolved decisions. Clarified Microsoft account type (personal Outlook.com + M365 Family). |
+| **1.0** | 2026-04-23 | Initial requirements document. |
+
+---
+
+## Decisions Log (from v1.0 → v1.1)
 
 | # | Decision | Impact |
 |---|---|---|
@@ -259,7 +269,7 @@ FamilyHub has three explicitly designed UI surfaces. Every feature must be desig
 
 **REQ-AUTH-007** — Each profile shall support: display name, avatar (uploaded photo or emoji/icon picker), color accent, age-appropriate UI mode, and notification preferences.
 
-**REQ-AUTH-008** — Login methods: 4–8 digit PIN (all roles), password (admin/co-admin/teen), passkey/WebAuthn (all roles on supporting devices).
+**REQ-AUTH-008** — Login methods: 4–8 digit PIN (all roles), password (admin/co-admin/teen). *(Passkey/WebAuthn deferred to Phase 3.)*
 
 **REQ-AUTH-009** — The wall screen shall support one-tap family member selection for completing tasks without a full login session. Optional PIN confirmation per family member is configurable by admin.
 
@@ -297,7 +307,7 @@ FamilyHub has three explicitly designed UI surfaces. Every feature must be desig
 
 **REQ-CAL-011** — The system shall integrate with Microsoft Calendar via OAuth2 and the Microsoft Graph API (`/me/calendars`, `/me/events`).
 
-**REQ-CAL-012** — Supports: personal Outlook.com accounts, Microsoft 365 accounts, and Exchange Online organizational accounts.
+**REQ-CAL-012** — Supports: personal Outlook.com accounts and Microsoft 365 Family accounts (using `tenant_id=common`). Organizational Exchange accounts require separate setup and are out of scope for Phase 1–3.
 
 **REQ-CAL-013** — Multiple Microsoft accounts may be connected.
 
@@ -726,14 +736,17 @@ The following are not in the initial phase plan but are strong candidates for la
 
 ---
 
-## 12. Open Questions
+## 12. Decisions Log (Previously Open Questions)
 
-1. **Wall screen hardware:** What is the specific display model and resolution? This affects the wall layout grid dimensions and font scaling defaults.
-2. **Remote access:** Is access from outside the home network a requirement? If yes, Tailscale (recommended) or Cloudflare Tunnel should be documented in Phase 1.
-3. **Multiple homes / co-parenting:** Single household only, or does the system need to handle shared custody / two-home schedules?
-4. **Photo source:** Is automatic ingestion from a phone camera roll (e.g., via Syncthing to a watched folder) in scope, or is manual upload sufficient for Phase 1?
-5. **Microsoft account type:** Personal Outlook.com, Microsoft 365 Family, or organizational (work/school) Exchange? OAuth2 app registration differs for each. If organizational, tenant configuration is needed.
-6. **Notification delivery while away from home:** Push notifications to PWA require the Pi to be reachable from the internet (or via a tunnel). Is this a Phase 1 requirement or can it wait?
+| # | Question | Decision | Rationale |
+|---|----------|----------|-----------|
+| 1 | Wall screen hardware: specific model and resolution? | **Design for 1920×1080, make responsive** | Most common resolution for dedicated touch displays. Responsive CSS will adapt to 1280×800 or other sizes. |
+| 2 | Remote access from outside home network? | **Defer to Phase 2** | Phase 1 is local-network only. Tailscale is the recommended approach for Phase 2 remote access. |
+| 3 | Multiple homes / co-parenting support? | **Out of scope for all 5 phases** | Single household only. Multi-household adds enormous complexity and is not needed for the target use case. |
+| 4 | Photo auto-ingestion vs manual upload? | **Manual upload Phase 1, auto-ingest Phase 3** | Manual upload is sufficient for MVP. Bulk import from watched folder (REQ-PHOTO-009) can be added in Phase 3. |
+| 5 | Microsoft account type? | **Personal Outlook.com + M365 Family only** | Using `tenant_id=common` covers 95% of use cases. Organizational Exchange requires separate setup. |
+| 6 | Push notifications while away from home? | **Defer to Phase 2** | Requires remote access (see Q2). Phase 1 push notifications work while on the home network only. |
+| 7 | Passkey/WebAuthn login? | **Defer to Phase 3** | PIN + password is sufficient for Phase 1–2. WebAuthn adds ~1 week of work better spent elsewhere. |
 
 ---
 

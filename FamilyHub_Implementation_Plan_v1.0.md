@@ -1,8 +1,17 @@
 # FamilyHub — Implementation Plan
-**Version:** 1.0
-**Derived from:** Requirements Document v1.1
-**Date:** April 2026
-**Status:** Ready for Development
+**Version:** 1.1
+**Derived from:** Requirements Document v1.2
+**Date:** April 29, 2026
+**Status:** Updated — Testing Strategy + Solo Dev Adjustments
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| **1.1** | 2026-04-29 | Added frontend test framework setup (Task 1.1.4). Expanded Phase 1 test suite with specific test counts and coverage targets (Task 1.4.10). Added Phase 1 Performance Baseline task (Task 1.4.11). Added Phase 1 Security Review checklist (Task 1.4.12). |
+| **1.0** | 2026-04-23 | Initial implementation plan derived from Requirements v1.1. |
 
 ---
 
@@ -130,7 +139,7 @@ familyhub/
 
 ---
 
-#### Task 1.1.4 `[FE]` *BLOCKER* — React/Vite/TypeScript frontend skeleton
+#### Task 1.1.4 `[FE]` *BLOCKER* — React/Vite/TypeScript frontend skeleton + test framework
 
 **What to build:**
 - Initialize Vite project: `npm create vite@latest frontend -- --template react-ts`
@@ -144,9 +153,17 @@ familyhub/
 - Create `src/api/client.ts`: axios instance with base URL `/api`, automatic JWT cookie handling, 401 interceptor redirecting to `/login`
 - `frontend/Dockerfile`: multi-stage build — `npm run build` → serve with `nginx:alpine`
 
+**Test Framework Setup:**
+- Install Vitest + React Testing Library: `vitest`, `@testing-library/react`, `@testing-library/user-event`, `jsdom`
+- Configure `vitest.config.ts` with test globals and jsdom environment
+- Create `createWrapper` helper for TanStack Query test setup (provides test `QueryClient`)
+- Add `test` and `test:coverage` scripts to `package.json`
+- Create placeholder test: `src/__tests__/pages/Login.test.tsx` (verifies framework works)
+
 **AC:**
 - `npm run dev` starts without errors
 - `npm run build` produces a `dist/` folder
+- `npm test` runs tests (framework configured, placeholder test passes)
 - Navigating to `https://familyhub.local` shows the React app (even a placeholder)
 - Chrome DevTools → Application → Manifest shows the PWA manifest with all required fields
 - "Install app" prompt appears in Chrome on desktop
@@ -681,11 +698,71 @@ All dashboard widgets load independently (each its own TanStack Query call) so o
 #### Task 1.4.10 `[TEST]` — Phase 1 integration test suite
 
 **What to build:**
-- `tests/test_auth.py`: setup flow, login (password + PIN), rate limiting, session validation
-- `tests/test_calendar.py`: event CRUD, recurrence expansion, date range query
-- `tests/test_tasks.py`: task CRUD, complete task (with + without photo), verify/reject, overdue job
-- `tests/test_photos.py`: upload, thumbnail generation, album management
-- Manual test checklist: run through Phase 1 exit criteria on actual Pi hardware before sprint close
+
+**Backend (pytest):**
+- `tests/test_auth.py` (12+ tests): setup flow, password login, PIN login, rate limiting (5 attempts → 429), session validation, token expiry, role-based endpoint access, 401 on missing cookie — **Coverage target: 90%+**
+- `tests/test_calendar.py` (15+ tests): event CRUD, recurrence expansion (daily/weekly/monthly RRULE), date range queries, all-day event handling, timezone conversion, soft delete — **Coverage target: 85%+**
+- `tests/test_tasks.py` (18+ tests): task CRUD, complete task (with + without photo), verify/reject, overdue job, subtask roll-up, recurrence generation, permission checks (non-admin can only complete own tasks) — **Coverage target: 85%+**
+- `tests/test_photos.py` (10+ tests): upload, thumbnail generation, HEIC→JPEG conversion, album CRUD, slideshow ordering (sequential/random/date) — **Coverage target: 80%+**
+- `tests/test_migrations.py` (3+ tests): `alembic upgrade +1` / `alembic downgrade -1` cycle for each migration — **Coverage target: 80%+**
+
+**Frontend (Vitest + RTL):**
+- `src/__tests__/pages/Login.test.tsx` (8+ tests): render family avatars, PIN pad input, successful login redirect, failed PIN lockout, password login — **Coverage target: 75%+**
+- `src/__tests__/pages/Dashboard.test.tsx` (6+ tests): render events widget, render tasks widget, child mode rendering, widget independent loading — **Coverage target: 75%+**
+- `src/__tests__/wall/WallClock.test.tsx` (4+ tests): clock updates every second, date displays correctly — **Coverage target: 80%+**
+
+**AC:**
+- `pytest --cov=app --cov-report=term-missing`: all tests pass, 80%+ overall coverage
+- `npm test`: all frontend tests pass, 70%+ coverage
+- CI reports coverage on every push; warns if coverage drops below targets
+
+---
+
+#### Task 1.4.11 `[TEST]` — Phase 1 Performance Baseline (Pi Hardware)
+
+**What to test:**
+- Dashboard load time: < 3 seconds (first paint)
+- GET /api/calendar/events: < 200ms (response time)
+- Wall display clock update: smooth (no visible lag)
+- Memory per container: api < 150MB, web < 80MB, caddy < 30MB
+
+**Equipment:** Raspberry Pi 4, 4GB RAM, actual Pi OS (not Docker Desktop)
+
+**How to measure:**
+```bash
+# API response time
+curl -w "%{time_total}s\n" -o /dev/null -s http://localhost:8000/api/calendar/events
+# Memory per container
+docker stats --no-stream
+```
+
+**AC:**
+- Dashboard fully renders in < 3s on Pi 4
+- All API endpoints respond in < 500ms (p95)
+- Memory stable after 1 hour continuous use
+- Document baseline metrics in `README.md`
+
+---
+
+#### Task 1.4.12 `[TEST]` — Phase 1 Security Review
+
+**Checklist:**
+- [ ] Authentication: verify `require_auth` / `get_current_user` on all non-public endpoints
+- [ ] Authorization: role checks — admin/co-admin endpoints reject teen/child/guest users (403)
+- [ ] Input validation: all API endpoints validate input via Pydantic schemas
+- [ ] Secrets: no API keys in code; all env vars documented in `.env.example`
+- [ ] CORS: `ALLOWED_ORIGINS` configured correctly, no `*` wildcard
+- [ ] Rate limiting: login and PIN attempts rate-limited (429 after 5 failures)
+- [ ] Data exposure: soft-deletes work (is_deleted=true), no leaked user data
+- [ ] Bandit scan: `bandit -r backend/app` — 0 critical issues
+- [ ] Cookie security: JWT cookies are httpOnly, SameSite=Strict
+
+**AC:**
+- All security checklist items pass
+- Bandit report: 0 critical issues
+- Document any known limitations as TODOs in code
+
+---
 
 **Phase 1 Exit Criteria (all must pass before Phase 2 begins):**
 - [ ] `docker compose up -d` on fresh Pi → app accessible at familyhub.local within 3 minutes
@@ -1323,5 +1400,5 @@ For any developer picking up this project:
 
 ---
 
-*Implementation Plan v1.0 — Derived from FamilyHub Requirements v1.1*
+*Implementation Plan v1.1 — Derived from FamilyHub Requirements v1.2*
 *Next update: After Phase 1 Sprint 1.2 retrospective*
