@@ -77,9 +77,5 @@ htmlcov/
 .pytest_cache/
 coverage.xml
 
-# Environment-specific
-config/
-
-# Keep example files
-!.env.example
-!config/Caddyfile.example
+# Environment-specific config (keep Caddyfile)
+# (config/Caddyfile is committed, other runtime config is not)

@@ -1,0 +1,18 @@
+familyhub.local {
+    tls internal
+
+    # API requests → FastAPI backend
+    handle_path /api* {
+        reverse_proxy api:8000
+    }
+
+    # Static files served by frontend
+    handle_path /photos* {
+        reverse_proxy api:8000
+    }
+
+    # Everything else → React frontend (nginx)
+    handle {
+        reverse_proxy web:3000
+    }
+}

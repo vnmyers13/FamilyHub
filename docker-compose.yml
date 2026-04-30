@@ -1,0 +1,54 @@
+# FamilyHub — Docker Compose
+# Version: 1.01
+# Date: 2026-04-30
+# Services: api (FastAPI), web (React/Vite + nginx), caddy (HTTPS reverse proxy)
+
+services:
+  # ── API Backend ──────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: "1.01"
+    container_name: familyhub-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Frontend Web App ─────────────────────────────────────────
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: familyhub-web
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+  # ── Caddy Reverse Proxy (HTTPS) ──────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: familyhub-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

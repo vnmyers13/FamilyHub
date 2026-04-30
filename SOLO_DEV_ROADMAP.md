@@ -1,8 +1,8 @@
 # FamilyHub Solo Developer Roadmap
 
-**Version:** 1.0
-**Status:** Initial Release
-**Date:** April 29, 2026
+**Version:** 1.01
+**Status:** Sprint 1.1 Complete
+**Date:** April 30, 2026
 **Based on:** FamilyHub Implementation Plan v1.0, Requirements Plan v1.2
 
 ---
@@ -11,6 +11,7 @@
 
 | Version | Date | Changes |
 |---|---|---|
+| **1.01** | 2026-04-30 | Sprint 1.1 complete: Dockerized infrastructure scaffold with FastAPI backend, nginx frontend, Caddy reverse proxy. All Alpine base images. 3/3 smoke tests passing. Alembic migrations auto-run on startup. |
 | **1.0** | 2026-04-29 | Initial solo developer roadmap. ~50-week timeline, scope priorities (Must/Should/Nice/Maybe), deferred features list, solo dev survival guide, and weekly/monthly rhythm. |
 
 ---

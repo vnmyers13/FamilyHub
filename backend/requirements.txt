@@ -1,0 +1,38 @@
+# FamilyHub Backend Dependencies
+# Core
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.18
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+alembic==1.14.1
+
+# Auth & Security
+pydantic-settings==2.7.1
+pyjwt==2.10.1
+passlib[bcrypt]==1.7.4
+
+# HTTP Client (for calendar sync, weather, etc.)
+httpx==0.28.1
+
+# Image Processing
+pillow==11.1.0
+
+# Scheduling (background jobs)
+apscheduler==3.10.4
+python-dateutil==2.9.0.post0
+
+# ICS Calendar Parsing
+icalendar==6.3.2
+
+# Push Notifications
+pywebpush==2.0.3
+
+# Email (optional)
+aiosmtpd==1.4.6
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.25.0
