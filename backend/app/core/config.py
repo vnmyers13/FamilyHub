@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -5,7 +6,7 @@ class Settings(BaseSettings):
     # ── Core ──────────────────────────────────────
     family_name: str = "FamilyHub"
     timezone: str = "UTC"
-    secret_key: str = "default-change-in-production"
+    secret_key: str = ""
     debug: bool = False
     log_level: str = "INFO"
 
@@ -52,7 +53,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        validate_default=True,
     )
+
+    @field_validator("secret_key")
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        if not v or v in ("default-change-in-production", "changeme"):
+            raise ValueError(
+                "SECRET_KEY must be set in .env and must not use a default value. "
+                "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+        return v
 
 
 settings = Settings()

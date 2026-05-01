@@ -27,6 +27,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.02] - 2026-04-30
+
+### Security Hardening (Code Review Fixes)
+
+### Added
+- `field_validator` on `secret_key` rejecting empty/default/"changeme" values
+- `validate_default=True` in Pydantic Settings model config
+- Connection pool limits: `pool_size=5`, `max_overflow=10`, `pool_timeout=30`, `pool_recycle=1800`
+- Security headers on nginx: `X-Frame-Options`, `X-Content-Type-Options`, `X-XSS-Protection`, `Referrer-Policy`, `Permissions-Policy`
+- Security headers on Caddy: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `Strict-Transport-Security`
+- Gzip compression on nginx for JS/CSS/JSON/XML/SVG
+- Rate limiting on Caddy: 20 requests/minute for `/api/*` paths
+- Network segmentation: `frontend` and `backend` Docker networks
+- Resource limits on all compose services (CPU + memory limits and reservations)
+- `depends_on` with health conditions (Caddy waits for healthy API)
+- `.dockerignore` files (root, backend, frontend) preventing secrets/cache in build layers
+- `backend/requirements-dev.txt` for test/dev dependency separation
+- `pip-audit` and `ruff` in dev dependencies
+- 4 new config security tests (total 7 tests)
+- Pytest `client` fixture for reusable test client
+- `CODE_REVIEW.md` documenting all findings and fixes
+- `MEMORY.md` project context file for AI-assisted development
+
+### Changed
+- Backend Dockerfile: non-root `appuser` with proper data directory ownership
+- Frontend Dockerfile: non-root `nginx` user with proper permissions
+- `aiosmtpd` moved from production to dev dependencies (commented in prod)
+- `pytest` and `pytest-asyncio` removed from production `requirements.txt`
+- Version bumped to 1.02 across all files
+- `SOLO_DEV_ROADMAP.md` updated: Python venv added to Sprint 1.2 scope
+
+### Security
+- Containers no longer run as root (least-privilege principle)
+- Secret key enforced at startup (no default fallback)
+- Build contexts exclude `.env`, `__pycache__`, `.git`, and data directories
+- Frontend cannot reach backend directly (network isolation)
+- HSTS enabled via Caddy (max-age=31536000)
+- Permissions-Policy disables geolocation, microphone, and camera
+
+### Testing
+- 7/7 tests passing (3 endpoint + 4 config security)
+- Test coverage expanded to verify security enforcement
+
+---
+
 ## [1.01] - 2026-04-30
 
 ### Sprint 1.1: Dockerized Infrastructure Scaffold (COMPLETE)

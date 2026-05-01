@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="FamilyHub API",
     description="Self-hosted family organizational hub",
-    version="1.01",
+    version="1.02",
     lifespan=lifespan,
 )
 
@@ -54,7 +54,7 @@ app.add_middleware(
 # ── Root ──────────────────────────────────────────────────────
 @app.get("/")
 async def root():
-    return {"message": "FamilyHub API", "version": "1.01", "docs": "/docs"}
+    return {"message": "FamilyHub API", "version": "1.02", "docs": "/docs"}
 
 
 # ── Health Check ──────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # FamilyHub
 
-**Version:** 1.01 &nbsp;|&nbsp; **Status:** Sprint 1.1 Complete &nbsp;|&nbsp; **Date:** April 30, 2026
+**Version:** 1.02 &nbsp;|&nbsp; **Status:** Sprint 1.1 Complete + Security Hardening &nbsp;|&nbsp; **Date:** April 30, 2026
 
 Self-hosted family organizational hub — a single Docker Compose stack that gives your family a shared calendar, task manager, wall display, and photo slideshow, all accessible from phones, tablets, and a wall-mounted screen.
 

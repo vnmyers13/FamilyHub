@@ -1,7 +1,7 @@
 # FamilyHub Solo Developer Roadmap
 
-**Version:** 1.01
-**Status:** Sprint 1.1 Complete
+**Version:** 1.02
+**Status:** Sprint 1.1 Complete + Security Hardening
 **Date:** April 30, 2026
 **Based on:** FamilyHub Implementation Plan v1.0, Requirements Plan v1.2
 
@@ -11,6 +11,7 @@
 
 | Version | Date | Changes |
 |---|---|---|
+| **1.02** | 2026-04-30 | Security hardening: secret key validator, non-root containers, .dockerignore files, connection pool limits, security headers (nginx+Caddy), network segmentation, resource limits, rate limiting, gzip compression, dev/prod dependency split, 7 tests passing. |
 | **1.01** | 2026-04-30 | Sprint 1.1 complete: Dockerized infrastructure scaffold with FastAPI backend, nginx frontend, Caddy reverse proxy. All Alpine base images. 3/3 smoke tests passing. Alembic migrations auto-run on startup. |
 | **1.0** | 2026-04-29 | Initial solo developer roadmap. ~50-week timeline, scope priorities (Must/Should/Nice/Maybe), deferred features list, solo dev survival guide, and weekly/monthly rhythm. |
 
@@ -63,7 +64,7 @@ The original 56-week plan assumes 2-3 developers working in parallel streams. As
 
 **Sprint Breakdown:**
 - Sprint 1.1 (Weeks 1-2): Project scaffold, Docker, DB, CI
-- Sprint 1.2 (Weeks 3-4): Auth, family profiles, PIN/password
+- Sprint 1.2 (Weeks 3-4): Auth, family profiles, PIN/password, establish Python venv
 - Sprint 1.3 (Weeks 5-6): Internal calendar, Google Calendar sync
 - Sprint 1.4 (Weeks 7-8): Tasks, dashboard, wall display
 - Sprint 1.5 (Weeks 9-10): Photos, slideshow, PWA polish, testing

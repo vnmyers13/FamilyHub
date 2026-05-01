@@ -1,5 +1,5 @@
 # FamilyHub — Docker Compose
-# Version: 1.01
+# Version: 1.02
 # Date: 2026-04-30
 # Services: api (FastAPI), web (React/Vite + nginx), caddy (HTTPS reverse proxy)
 
@@ -10,7 +10,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "1.01"
+        APP_VERSION: "1.02"
     container_name: familyhub-api
     restart: unless-stopped
     env_file:
@@ -25,6 +25,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - frontend
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
 
   # ── Frontend Web App ─────────────────────────────────────────
   web:
@@ -35,6 +46,16 @@ services:
     restart: unless-stopped
     expose:
       - "3000"
+    networks:
+      - frontend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
 
   # ── Caddy Reverse Proxy (HTTPS) ──────────────────────────────
   caddy:
@@ -48,6 +69,29 @@ services:
       - ./config/Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    networks:
+      - frontend
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+# Network segmentation: frontend↔backend isolation
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
 
 volumes:
   caddy_data:

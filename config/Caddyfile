@@ -1,6 +1,19 @@
 familyhub.local {
     tls internal
 
+    # Security headers
+    header {
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    }
+
+    # Rate limiting for API
+    @api path /api/*
+    rate_limit @api 20 1m
+
     # API requests → FastAPI backend
     handle_path /api* {
         reverse_proxy api:8000

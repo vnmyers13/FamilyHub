@@ -30,9 +30,5 @@ icalendar==6.3.2
 # Push Notifications
 pywebpush==2.0.3
 
-# Email (optional)
-aiosmtpd==1.4.6
-
-# Testing
-pytest==8.3.4
-pytest-asyncio==0.25.0
+# Email (dev/testing only, remove from production if not used)
+# aiosmtpd==1.4.6
