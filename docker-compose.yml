@@ -1,6 +1,6 @@
 # FamilyHub — Docker Compose
-# Version: 1.02
-# Date: 2026-04-30
+# Version: 0.0.1 (Pre-Alpha)
+# Date: 2026-05-01
 # Services: api (FastAPI), web (React/Vite + nginx), caddy (HTTPS reverse proxy)
 
 services:
@@ -10,7 +10,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "1.02"
+        APP_VERSION: "0.0.1"
     container_name: familyhub-api
     restart: unless-stopped
     env_file:
